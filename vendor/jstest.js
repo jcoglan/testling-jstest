@@ -458,7 +458,8 @@ Package.BrowserLoader = {
   HOST_REGEX: /^(https?\:)?\/\/[^\/]+/i,
 
   usable: function() {
-    return !!Package._getObject('window.document.getElementsByTagName');
+    return !!Package._getObject('window.document.getElementsByTagName') &&
+           typeof phantom === 'undefined';
   },
 
   __FILE__: function() {
@@ -654,8 +655,8 @@ Package.XULRunnerLoader = {
 
 var candidates = [  Package.XULRunnerLoader,
                     Package.RhinoLoader,
-                    Package.CommonJSLoader,
                     Package.BrowserLoader,
+                    Package.CommonJSLoader,
                     Package.ServerLoader,
                     Package.WshLoader ],
 
