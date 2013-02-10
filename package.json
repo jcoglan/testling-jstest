@@ -14,7 +14,11 @@
       "test/runner.js"
     ],
     "browsers": {
-      "chrome": [23]
+      "chrome":   [23],
+      "iexplore": [6, 7, 8, 9, 10],
+      "firefox":  [3.5, 3.6, 17],
+      "opera":    [10.5, 11.6, 12.0],
+      "safari":   [5.1]
     }
   }
 }
