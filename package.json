@@ -8,7 +8,9 @@
 
   "testling": {
     "scripts": [
+      "lib/widget.js",
       "vendor/jstest.js",
+      "test/specs/widget_spec.js",
       "test/runner.js"
     ],
     "browsers": {
