@@ -7,11 +7,7 @@ JS.packages(function() { with(this) {
 
 JS.require('JS.Test', function(Test) {
 
-  JS.require('WidgetSpec',
-    function() {
-      Test.autorun(function(r) {
-        if (typeof window !== 'undefined') r.addReporter(new Test.Reporters.TAP())
-      })
-    })
+  JS.require( 'WidgetSpec',
+              function() { Test.autorun() })
 })
 

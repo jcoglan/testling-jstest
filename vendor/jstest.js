@@ -5679,6 +5679,17 @@ Test.Reporters.register('json', Test.Reporters.JSON);
 
 Test.Reporters.extend({
   TAP: new JS.Class({
+    extend: {
+      HOSTNAME: 'testling',
+
+      create: function(options) {
+        var location = JS.ENV.location;
+        if (!location) return;
+        var parts = location.hostname.split('.');
+        if (JS.indexOf(parts, this.HOSTNAME) >= 0) return new this(options);
+      }
+    },
+ 
     include: Console,
 
     startSuite: function(event) {
