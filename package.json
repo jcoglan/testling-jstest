@@ -12,7 +12,7 @@
       "test/runner.js"
     ],
     "browsers": {
-      "chrome": [24]
+      "chrome": [23]
     }
   }
 }
