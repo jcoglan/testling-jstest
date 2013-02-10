@@ -5,9 +5,6 @@ JS.packages(function() { with(this) {
   autoload(/^.*$/, {from: ROOT + '/lib'})
 }})
 
-JS.require('JS.Test', function(Test) {
-
-  JS.require( 'WidgetSpec',
-              function() { Test.autorun() })
-})
+JS.require( 'WidgetSpec',
+            function() { JS.Test.autorun() })
 
