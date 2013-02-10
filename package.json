@@ -1,0 +1,19 @@
+{
+  "name": "testling-jstest",
+  "version": "0.0.0",
+
+  "devDependencies": {
+    "nopt": ""
+  },
+
+  "testling": {
+    "scripts": [
+      "vendor/jstest.js",
+      "test/runner.js"
+    ],
+    "browsers": {
+      "chrome": [24]
+    }
+  }
+}
+
