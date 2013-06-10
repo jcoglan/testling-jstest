@@ -35,9 +35,10 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
- */
+ **/
 
 var JS = (typeof this.JS === 'undefined') ? {} : this.JS;
+JS.Date = Date;
 
 (function(factory) {
   var $ = (typeof this.global === 'object') ? this.global : this,
@@ -53,7 +54,6 @@ var JS = (typeof this.JS === 'undefined') ? {} : this.JS;
 
 })(function(global, exports) {
 'use strict';
-
 
 var Package = function(loader) {
   Package._index(this);
@@ -79,7 +79,7 @@ Package.log = function(message) {
 
 var resolve = function(filename) {
   if (/^https?:/.test(filename)) return filename;
-  var root = exports.WEB_ROOT;
+  var root = exports.ROOT;
   if (root) filename = (root + '/' + filename).replace(/\/+/g, '/');
   return filename;
 };
@@ -321,10 +321,12 @@ Package.when = function(eventTable, block, context) {
 //================================================================
 // Indexes for fast lookup by path and name, and assigning IDs
 
-Package._autoIncrement = 1;
-Package._indexByPath   = {};
-Package._indexByName   = {};
-Package._autoloaders   = [];
+var globalPackage = (global.JS || {}).Package || {};
+
+Package._autoIncrement = globalPackage._autoIncrement || 1;
+Package._indexByPath   = globalPackage._indexByPath   || {};
+Package._indexByName   = globalPackage._indexByName   || {};
+Package._autoloaders   = globalPackage._autoloaders   || [];
 
 Package._index = function(pkg) {
   pkg.id = this._autoIncrement;
@@ -419,7 +421,6 @@ Package._getObject = function(name, rootObject) {
   return cached.obj = object;
 };
 
-
 Package.CommonJSLoader = {
   usable: function() {
     return typeof require === 'function' &&
@@ -453,7 +454,6 @@ Package.CommonJSLoader = {
   }
 };
 
-
 Package.BrowserLoader = {
   HOST_REGEX: /^(https?\:)?\/\/[^\/]+/i,
 
@@ -474,7 +474,7 @@ Package.BrowserLoader = {
 
   cacheBust: function(path) {
     if (exports.cache !== false) return path;
-    var token = new Date().getTime();
+    var token = new JS.Date().getTime();
     return path + (/\?/.test(path) ? '&' : '?') + token;
   },
 
@@ -486,7 +486,7 @@ Package.BrowserLoader = {
     var host = this.HOST_REGEX.exec(path);
 
     if (!this.HOST || (host && host[0] !== this.HOST[0])) return null;
-    Package.log('Loading ' + path);
+    Package.log('[FETCH] ' + path);
 
     var source = new Package.Deferred(),
         self   = this,
@@ -516,13 +516,13 @@ Package.BrowserLoader = {
 
     if (source)
       return source.callback(function(code) {
-        Package.log('Executing ' + path);
+        Package.log('[EXEC]  ' + path);
         var execute = new Function('code', 'eval(code)');
         execute(code);
         fireCallbacks();
       });
 
-    Package.log('Loading and executing ' + path);
+    Package.log('[LOAD] ' + path);
     script.src = path;
 
     script.onload = script.onreadystatechange = function() {
@@ -550,7 +550,6 @@ Package.BrowserLoader = {
   _K: function() {}
 };
 
-
 Package.RhinoLoader = {
   usable: function() {
     return typeof java === 'object' &&
@@ -574,7 +573,6 @@ Package.RhinoLoader = {
   }
 };
 
-
 Package.ServerLoader = {
   usable: function() {
     return typeof Package._getObject('load') === 'function' &&
@@ -591,7 +589,6 @@ Package.ServerLoader = {
     fireCallbacks();
   }
 };
-
 
 Package.WshLoader = {
   usable: function() {
@@ -617,7 +614,6 @@ Package.WshLoader = {
   }
 };
 
-
 Package.XULRunnerLoader = {
   jsloader:   '@mozilla.org/moz/jssubscript-loader;1',
   cssservice: '@mozilla.org/content/style-sheet-service;1',
@@ -640,7 +636,7 @@ Package.XULRunnerLoader = {
   },
 
   loadFile: function(path, fireCallbacks) {
-    Package.log('Loading ' + path);
+    Package.log('[LOAD] ' + path);
 
     this.ssl.loadSubScript(path);
     fireCallbacks();
@@ -651,7 +647,6 @@ Package.XULRunnerLoader = {
     this.sss.loadAndRegisterSheet(uri, this.sss.USER_SHEET);
   }
 };
-
 
 var candidates = [  Package.XULRunnerLoader,
                     Package.RhinoLoader,
@@ -672,7 +667,6 @@ for (i = 0; i < n; i++) {
   }
 }
 
-
 var DSL = {
   __FILE__: function() {
     return Package.loader.__FILE__();
@@ -687,7 +681,9 @@ var DSL = {
   },
 
   file: function(filename) {
-    return Package._getByPath(resolve(filename));
+    var files = [], i = arguments.length;
+    while (i--) files[i] = resolve(arguments[i]);
+    return Package._getByPath.apply(Package, files);
   },
 
   load: function(path, fireCallbacks) {
@@ -706,34 +702,45 @@ var packages = function(declaration) {
   declaration.call(DSL);
 };
 
+var parseLoadArgs = function(args) {
+ var files = [], i = 0;
+
+  while (typeof args[i] === 'string'){
+    files.push(args[i]);
+    i += 1;
+  }
+
+  return {files: files, callback: args[i], context: args[i+1]};
+};
+
 exports.load = function(path, callback) {
-  return Package.loader.loadFile(path, callback || function() {});
+  var args = parseLoadArgs(arguments),
+      n    = args.files.length;
+
+  var loadNext = function(index) {
+    if (index === n) return args.callback.call(args.context);
+    Package.loader.loadFile(args.files[index], function() {
+      loadNext(index + 1);
+    });
+  };
+  loadNext(0);
 };
 
 exports.require = function() {
-  var requirements = [], i = 0;
+  var args = parseLoadArgs(arguments);
 
-  while (typeof arguments[i] === 'string'){
-    requirements.push(arguments[i]);
-    i += 1;
-  }
-  var callback = arguments[i], context = arguments[i+1];
-
-  Package.when({complete: requirements}, function(objects) {
-    if (!callback) return;
-    callback.apply(context || null, objects && objects.complete);
+  Package.when({complete: args.files}, function(objects) {
+    if (!args.callback) return;
+    args.callback.apply(args.context, objects && objects.complete);
   });
 
   return this;
 };
 
-
 exports.Package  = Package;
 exports.Packages = exports.packages = packages;
 exports.DSL      = DSL;
 });
-
-
 
 /**
  * JS.Class: Ruby-style JavaScript
@@ -772,7 +779,7 @@ exports.DSL      = DSL;
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
- */
+ **/
 
 var JS = (typeof this.JS === 'undefined') ? {} : this.JS;
 
@@ -791,7 +798,6 @@ var JS = (typeof this.JS === 'undefined') ? {} : this.JS;
 })(function(global, exports) {
 'use strict';
 
-
 var JS = {ENV: global};
 
 JS.END_WITHOUT_DOT = /([^\.])$/;
@@ -807,6 +813,8 @@ JS.bind = function(method, object) {
     return method.apply(object, arguments);
   };
 };
+
+JS.Date = JS.ENV.Date;
 
 JS.extend = function(destination, source, overwrite) {
   if (!destination || !source) return destination;
@@ -869,7 +877,6 @@ JS.match = function(category, object) {
        ? category.test(object)
        : category.match(object);
 };
-
 
 JS.Method = JS.makeClass();
 
@@ -1258,7 +1265,6 @@ JS.extend(JS.Module.prototype, {
   }
 });
 
-
 JS.Kernel = new JS.Module('Kernel', {
   __eigen__: function() {
     if (this.__meta__) return this.__meta__;
@@ -1304,7 +1310,7 @@ JS.Kernel = new JS.Module('Kernel', {
   },
 
   tap: function(block, context) {
-    block.call(context || null, this);
+    block.call(context, this);
     return this;
   },
 
@@ -1320,12 +1326,11 @@ JS.Kernel = new JS.Module('Kernel', {
 
   JS.Kernel.hashFor = function(object) {
     if (object.__hash__ !== undefined) return object.__hash__;
-    object.__hash__ = (new Date().getTime() + id).toString(16);
+    object.__hash__ = (new JS.Date().getTime() + id).toString(16);
     id += 1;
     return object.__hash__;
   };
 })();
-
 
 JS.Class = JS.makeClass(JS.Module);
 
@@ -1373,7 +1378,6 @@ JS.extend(JS.Class.prototype, {
   }
 });
 
-
 (function() {
   var methodsFromPrototype = function(klass) {
     var methods = {},
@@ -1418,7 +1422,6 @@ JS.extend(JS.Class.prototype, {
 
 JS.NotImplementedError = new JS.Class('NotImplementedError', Error);
 
-
 JS.Method.keyword('callSuper', function(method, env, receiver, args) {
   var methods    = env.lookup(method.name),
       stackIndex = methods.length - 1,
@@ -1452,7 +1455,6 @@ JS.Method.keyword('yieldWith', function(method, env, receiver, args) {
   };
 });
 
-
 JS.Interface = new JS.Class('Interface', {
   initialize: function(methods) {
     this.test = function(object, returnName) {
@@ -1476,19 +1478,15 @@ JS.Interface = new JS.Class('Interface', {
   }
 });
 
-
 JS.Singleton = new JS.Class('Singleton', {
   initialize: function(name, parent, methods) {
     return new (new JS.Class(name, parent, methods));
   }
 });
 
-
 JS.extend(exports, JS);
 if (global.JS) JS.extend(global.JS, JS);
 });
-
-
 
 (function(factory) {
   var E  = (typeof exports === 'object'),
@@ -1507,7 +1505,7 @@ var Enumerable = new JS.Module('Enumerable', {
     forEach: function(block, context) {
       if (!block) return new Enumerator(this, 'forEach');
       for (var i = 0; i < this.length; i++)
-        block.call(context || null, this[i]);
+        block.call(context, this[i]);
       return this;
     },
 
@@ -1592,7 +1590,7 @@ var Enumerable = new JS.Module('Enumerable', {
     block = Enumerable.toFn(block);
     var truth = true;
     this.forEach(function(item) {
-      truth = truth && (block ? block.apply(context || null, arguments) : item);
+      truth = truth && (block ? block.apply(context, arguments) : item);
     });
     return !!truth;
   },
@@ -1601,7 +1599,7 @@ var Enumerable = new JS.Module('Enumerable', {
     block = Enumerable.toFn(block);
     var truth = false;
     this.forEach(function(item) {
-      truth = truth || (block ? block.apply(context || null, arguments) : item);
+      truth = truth || (block ? block.apply(context, arguments) : item);
     });
     return !!truth;
   },
@@ -1614,7 +1612,7 @@ var Enumerable = new JS.Module('Enumerable', {
       block = function(x) { return Enumerable.areEqual(x, object) };
 
     this.forEach(function() {
-      if (!block || block.apply(context || null, arguments))
+      if (!block || block.apply(context, arguments))
         count += 1;
     });
     return count;
@@ -1642,7 +1640,7 @@ var Enumerable = new JS.Module('Enumerable', {
         drop    = true;
 
     this.forEach(function(item) {
-      if (drop) drop = drop && block.apply(context || null, arguments);
+      if (drop) drop = drop && block.apply(context, arguments);
       if (!drop) entries.push(item);
     });
     return entries;
@@ -1658,7 +1656,7 @@ var Enumerable = new JS.Module('Enumerable', {
         i;
 
     for (i = 0; i <= limit; i++)
-      block.call(context || null, entries.slice(i, i+n));
+      block.call(context, entries.slice(i, i+n));
 
     return this;
   },
@@ -1673,7 +1671,7 @@ var Enumerable = new JS.Module('Enumerable', {
         i;
 
     for (i = 0; i < m; i++)
-      block.call(context || null, entries.slice(i*n, (i+1)*n));
+      block.call(context, entries.slice(i*n, (i+1)*n));
 
     return this;
   },
@@ -1690,7 +1688,7 @@ var Enumerable = new JS.Module('Enumerable', {
     block = Enumerable.toFn(block);
 
     return this.forEach(function(item) {
-      var result = block.call(context || null, item, offset);
+      var result = block.call(context, item, offset);
       offset += 1;
       return result;
     });
@@ -1702,7 +1700,7 @@ var Enumerable = new JS.Module('Enumerable', {
 
     this.forEach(function() {
       var args = [object].concat(JS.array(arguments));
-      block.apply(context || null, args);
+      block.apply(context, args);
     });
     return object;
   },
@@ -1714,7 +1712,7 @@ var Enumerable = new JS.Module('Enumerable', {
     var needle = {}, K = needle;
     this.forEach(function(item) {
       if (needle !== K) return;
-      needle = block.apply(context || null, arguments) ? item : needle;
+      needle = block.apply(context, arguments) ? item : needle;
     });
     return needle === K ? null : needle;
   },
@@ -1727,7 +1725,7 @@ var Enumerable = new JS.Module('Enumerable', {
 
     this.forEachWithIndex(function(item, i) {
       if (index !== null) return;
-      if (Enumerable.areEqual(needle, item) || (block && needle.apply(context || null, arguments)))
+      if (Enumerable.areEqual(needle, item) || (block && needle.apply(context, arguments)))
         index = i;
     });
     return index;
@@ -1747,7 +1745,7 @@ var Enumerable = new JS.Module('Enumerable', {
                 : JS.isType(item, pattern);
 
       if (!match) return;
-      if (block) item = block.apply(context || null, arguments);
+      if (block) item = block.apply(context, arguments);
       results.push(item);
     });
     return results;
@@ -1761,7 +1759,7 @@ var Enumerable = new JS.Module('Enumerable', {
         hash = new Hash();
 
     this.forEach(function(item) {
-      var value = block.apply(context || null, arguments);
+      var value = block.apply(context, arguments);
       if (!hash.hasKey(value)) hash.store(value, []);
       hash.get(value).push(item);
     });
@@ -1789,7 +1787,7 @@ var Enumerable = new JS.Module('Enumerable', {
     this.forEach(function(item) {
       if (!counter++ && memo === K) return memo = item;
       var args = [memo].concat(JS.array(arguments));
-      memo = block.apply(context || null, args);
+      memo = block.apply(context, args);
     });
     return memo;
   },
@@ -1800,7 +1798,7 @@ var Enumerable = new JS.Module('Enumerable', {
 
     var map = [];
     this.forEach(function() {
-      map.push(block.apply(context || null, arguments));
+      map.push(block.apply(context, arguments));
     });
     return map;
   },
@@ -1846,7 +1844,7 @@ var Enumerable = new JS.Module('Enumerable', {
     block = Enumerable.toFn(block);
     var count = 0;
     this.forEach(function(item) {
-      if (block ? block.apply(context || null, arguments) : item) count += 1;
+      if (block ? block.apply(context, arguments) : item) count += 1;
     });
     return count === 1;
   },
@@ -1857,7 +1855,7 @@ var Enumerable = new JS.Module('Enumerable', {
 
     var ayes = [], noes = [];
     this.forEach(function(item) {
-      (block.apply(context || null, arguments) ? ayes : noes).push(item);
+      (block.apply(context, arguments) ? ayes : noes).push(item);
     });
     return [ayes, noes];
   },
@@ -1868,7 +1866,7 @@ var Enumerable = new JS.Module('Enumerable', {
 
     var map = [];
     this.forEach(function(item) {
-      if (!block.apply(context || null, arguments)) map.push(item);
+      if (!block.apply(context, arguments)) map.push(item);
     });
     return map;
   },
@@ -1880,7 +1878,7 @@ var Enumerable = new JS.Module('Enumerable', {
     var entries = this.toArray(),
         n       = entries.length;
 
-    while (n--) block.call(context || null, entries[n]);
+    while (n--) block.call(context, entries[n]);
     return this;
   },
 
@@ -1890,7 +1888,7 @@ var Enumerable = new JS.Module('Enumerable', {
 
     var map = [];
     this.forEach(function(item) {
-      if (block.apply(context || null, arguments)) map.push(item);
+      if (block.apply(context, arguments)) map.push(item);
     });
     return map;
   },
@@ -1903,7 +1901,7 @@ var Enumerable = new JS.Module('Enumerable', {
         ? function(a,b) { return a.compareTo(b); }
         : null);
     return block
-        ? entries.sort(function(a,b) { return block.call(context || null, a, b); })
+        ? entries.sort(function(a,b) { return block.call(context, a, b); })
         : entries.sort();
   },
 
@@ -1936,7 +1934,7 @@ var Enumerable = new JS.Module('Enumerable', {
     var entries = [],
         take    = true;
     this.forEach(function(item) {
-      if (take) take = take && block.apply(context || null, arguments);
+      if (take) take = take && block.apply(context, arguments);
       if (take) entries.push(item);
     });
     return entries;
@@ -2082,8 +2080,6 @@ JS.Kernel.alias({toEnum: 'enumFor'});
 exports.Enumerable = Enumerable;
 });
 
-
-
 (function(factory) {
   var E  = (typeof exports === 'object'),
       js = (typeof JS === 'undefined') ? require('./core') : JS,
@@ -2095,7 +2091,6 @@ exports.Enumerable = Enumerable;
 
 })(function(JS, Enumerable, exports) {
 'use strict';
-
 
 var Console = new JS.Module('Console', {
   extend: {
@@ -2192,7 +2187,7 @@ var Console = new JS.Module('Console', {
 
     filterBacktrace: function(stack) {
       if (!stack) return stack;
-      stack = stack.replace(/^\S.*\n/gm, '');
+      stack = stack.replace(/^\S.*\n?/gm, '');
       var filter = this.adapter.backtraceFilter();
 
       return filter
@@ -2207,38 +2202,71 @@ var Console = new JS.Module('Console', {
     NO_COLOR:       'NO_COLOR',
 
     ESCAPE_CODES: {
-      cursorUp:           '%1A',
-      cursorDown:         '%1B',
-      cursorForward:      '%1C',
-      cursorBack:         '%1D',
-      cursorNextLine:     '%1E',
-      cursorPrevLine:     '%1F',
-      cursorColumn:       '%1G',
-      cursorPosition:     '%1;%2H',
-      cursorHide:         '?25l',
-      cursorShow:         '?25h',
+      cursor: {
+        cursorUp:           '%1A',
+        cursorDown:         '%1B',
+        cursorForward:      '%1C',
+        cursorBack:         '%1D',
+        cursorNextLine:     '%1E',
+        cursorPrevLine:     '%1F',
+        cursorColumn:       '%1G',
+        cursorPosition:     '%1;%2H',
+        cursorHide:         '?25l',
+        cursorShow:         '?25h'
+      },
 
-      eraseScreenForward: '0J',
-      eraseScreenBack:    '1J',
-      eraseScreen:        '2J',
-      eraseLineForward:   '0K',
-      eraseLineBack:      '1K',
-      eraseLine:          '2K',
+      screen: {
+        eraseScreenForward: '0J',
+        eraseScreenBack:    '1J',
+        eraseScreen:        '2J',
+        eraseLineForward:   '0K',
+        eraseLineBack:      '1K',
+        eraseLine:          '2K'
+      },
 
-      reset:      '0m',
-      bold:       '1m',   normal:     '22m',
-      underline:  '4m',   noline:     '24m',
-      blink:      '5m',   noblink:    '25m',
+      reset: {
+        reset:      '0m'
+      },
 
-      black:      '30m',  bgblack:    '40m',
-      red:        '31m',  bgred:      '41m',
-      green:      '32m',  bggreen:    '42m',
-      yellow:     '33m',  bgyellow:   '43m',
-      blue:       '34m',  bgblue:     '44m',
-      magenta:    '35m',  bgmagenta:  '45m',
-      cyan:       '36m',  bgcyan:     '46m',
-      white:      '37m',  bgwhite:    '47m',
-      nocolor:    '39m',  bgnocolor:  '49m'
+      weight: {
+        bold:       '1m',   normal:     '22m'
+      },
+
+      style: {
+        italic:     '',     noitalic:   ''
+      },
+
+      underline: {
+        underline:  '4m',   noline:     '24m'
+      },
+
+      blink: {
+        blink:      '5m',   noblink:    '25m'
+      },
+
+      color: {
+        black:      '30m',
+        red:        '31m',
+        green:      '32m',
+        yellow:     '33m',
+        blue:       '34m',
+        magenta:    '35m',
+        cyan:       '36m',
+        white:      '37m',
+        nocolor:    '39m'
+      },
+
+      background: {
+        bgblack:    '40m',
+        bgred:      '41m',
+        bggreen:    '42m',
+        bgyellow:   '43m',
+        bgblue:     '44m',
+        bgmagenta:  '45m',
+        bgcyan:     '46m',
+        bgwhite:    '47m',
+        bgnocolor:  '49m'
+      }
     },
 
     coloring: function() {
@@ -2279,7 +2307,6 @@ var Console = new JS.Module('Console', {
   }
 });
 
-
 Console.extend({
   Base: new JS.Class({
     __buffer__: '',
@@ -2294,7 +2321,7 @@ Console.extend({
     },
 
     coloring: function() {
-      return true;
+      return !this.envvar(Console.NO_COLOR);
     },
     
     echo: function(string) {
@@ -2311,9 +2338,9 @@ Console.extend({
       if (typeof quit === 'function')                quit(status);
     },
 
-    format: function(name, args) {
+    format: function(type, name, args) {
       if (!this.coloring()) return;
-      var escape = Console.ESCAPE_CODES[name];
+      var escape = Console.ESCAPE_CODES[type][name];
 
       for (var i = 0, n = args.length; i < n; i++)
         escape = escape.replace('%' + (i+1), args[i]);
@@ -2369,7 +2396,6 @@ Console.extend({
   })
 });
 
-
 Console.extend({
   Browser: new JS.Class(Console.Base, {
     backtraceFilter: function() {
@@ -2377,8 +2403,8 @@ Console.extend({
     },
 
     coloring: function() {
-      if (Console.envvar(Console.NO_COLOR)) return false;
-      return Console.AIR || Console.PHANTOM;
+      if (this.envvar(Console.NO_COLOR)) return false;
+      return Console.AIR;
     },
 
     echo: function(string) {
@@ -2388,23 +2414,80 @@ Console.extend({
     },
 
     envvar: function(name) {
-      if (Console.PHANTOM)
-        return require('system').env[name] || null;
-      else
-        return window[name] || null;
-    },
-
-    exit: function(status) {
-      if (Console.PHANTOM) phantom.exit(status);
+      return window[name] || null;
     },
 
     getDimensions: function() {
-      if (Console.AIR || Console.PHANTOM) return this.callSuper();
+      if (Console.AIR) return this.callSuper();
       return [1024, 1];
     }
   })
 });
 
+Console.extend({
+  BrowserColor: new JS.Class(Console.Browser, {
+    COLORS: {
+      green: 'limegreen'
+    },
+
+    __queue__: [],
+    __state__: {},
+
+    format: function(type, name) {
+      name = name.replace(/^bg/, '');
+
+      var state = JS.extend({}, this.__state__),
+          color = this.COLORS[name] || name,
+          no    = /^no/.test(name);
+
+      if (type === 'reset')
+        state = {};
+      else if (no)
+        delete state[type];
+      else if (type === 'weight')
+        state.weight = 'font-weight: ' + name;
+      else if (type === 'style')
+        state.style = 'font-style: ' + name;
+      else if (type === 'underline')
+        state.underline = 'text-decoration: underline';
+      else if (type === 'color')
+        state.color = 'color: ' + color;
+      else if (type === 'background')
+        state.background = 'background-color: ' + color;
+      else
+        state = null;
+
+      if (state) {
+        this.__state__ = state;
+        this.__queue__.push(state);
+      }
+    },
+
+    print: function(string) {
+      this.__queue__.push(string)
+    },
+
+    puts: function(string) {
+      this.print(string);
+      var buffer = '', formats = [], item;
+      while (item = this.__queue__.shift()) {
+        if (typeof item === 'string') {
+          buffer += '%c' + item;
+          formats.push(this._serialize(this.__state__));
+        } else {
+          this.__state__ = item;
+        }
+      }
+      console.log.apply(console, [buffer].concat(formats));
+    },
+
+    _serialize: function(state) {
+      var rules = [];
+      for (var key in state) rules.push(state[key]);
+      return rules.join('; ');
+    }
+  })
+});
 
 Console.extend({
   Node: new JS.Class(Console.Base, {
@@ -2413,7 +2496,7 @@ Console.extend({
     },
 
     coloring: function() {
-      return !process.env[Console.NO_COLOR] && require('tty').isatty(1);
+      return !this.envvar(Console.NO_COLOR) && require('tty').isatty(1);
     },
 
     envvar: function(name) {
@@ -2448,15 +2531,26 @@ Console.extend({
   })
 });
 
+Console.extend({
+  Phantom: new JS.Class(Console.Base, {
+    echo: function(string) {
+      console.log(string);
+    },
+
+    envvar: function(name) {
+      return require('system').env[name] || null;
+    },
+
+    exit: function(status) {
+      phantom.exit(status);
+    }
+  })
+});
 
 Console.extend({
   Rhino: new JS.Class(Console.Base, {
     backtraceFilter: function() {
       return new RegExp(java.lang.System.getProperty('user.dir') + '/', 'g');
-    },
-
-    coloring: function() {
-      return !this.envvar(Console.NO_COLOR);
     },
 
     envvar: function(name) {
@@ -2492,7 +2586,6 @@ Console.extend({
   })
 });
 
-
 Console.extend({
   Windows: new JS.Class(Console.Base, {
     coloring: function() {
@@ -2509,7 +2602,6 @@ Console.extend({
   })
 });
 
-
 Console.BROWSER = (typeof window !== 'undefined');
 Console.NODE    = (typeof process === 'object') && !Console.BROWSER;
 Console.PHANTOM = (typeof phantom !== 'undefined');
@@ -2517,25 +2609,33 @@ Console.AIR     = (Console.BROWSER && typeof runtime !== 'undefined');
 Console.RHINO   = (typeof java !== 'undefined' && typeof java.lang !== 'undefined');
 Console.WSH     = (typeof WScript !== 'undefined');
 
-if (Console.BROWSER)    Console.adapter = new Console.Browser();
-else if (Console.NODE)  Console.adapter = new Console.Node();
-else if (Console.RHINO) Console.adapter = new Console.Rhino();
-else if (Console.WSH)   Console.adapter = new Console.Windows();
-else                    Console.adapter = new Console.Base();
+var useColor = false, ua;
+if (Console.BROWSER) {
+  ua = navigator.userAgent;
+  if (window.console && (/Firefox/.test(ua) || /Chrome/.test(ua)))
+    useColor = true;
+}
 
-for (var key in Console.ESCAPE_CODES) (function(key) {
-  Console.define(key, function() {
-    Console.adapter.format(key, arguments);
-  });
-})(key);
+if (Console.PHANTOM)      Console.adapter = new Console.Phantom();
+else if (useColor)        Console.adapter = new Console.BrowserColor();
+else if (Console.BROWSER) Console.adapter = new Console.Browser();
+else if (Console.NODE)    Console.adapter = new Console.Node();
+else if (Console.RHINO)   Console.adapter = new Console.Rhino();
+else if (Console.WSH)     Console.adapter = new Console.Windows();
+else                      Console.adapter = new Console.Base();
+
+for (var type in Console.ESCAPE_CODES) {
+  for (var key in Console.ESCAPE_CODES[type]) (function(type, key) {
+    Console.define(key, function() {
+      Console.adapter.format(type, key, arguments);
+    });
+  })(type, key);
+}
 
 Console.extend(Console);
 
-
 exports.Console = Console;
 });
-
-
 
 (function(factory) {
   var E  = (typeof exports === 'object'),
@@ -2546,7 +2646,6 @@ exports.Console = Console;
 
 })(function(JS, exports) {
 'use strict';
-
 
 var DOM = {
   ELEMENT_NODE:                   1,
@@ -2584,7 +2683,6 @@ var DOM = {
     node.className = node.className.replace(pattern, '');
   }
 };
-
 
 DOM.Builder = new JS.Class('DOM.Builder', {
   extend: {
@@ -2652,7 +2750,6 @@ DOM.Builder.addElements([
   'var', 'video', 'wbr'
 ]);
 
-
 DOM.Event = {
   _registry: [],
 
@@ -2704,11 +2801,8 @@ DOM.Event = {
 
 DOM.Event.on(DOM.ENV, 'unload', DOM.Event.detach, DOM.Event);
 
-
 exports.DOM = DOM;
 });
-
-
 
 (function(factory) {
   var E  = (typeof exports === 'object'),
@@ -2760,8 +2854,6 @@ var Comparable = new JS.Module('Comparable', {
 
 exports.Comparable = Comparable;
 });
-
-
 
 (function(factory) {
   var E  = (typeof exports === 'object'),
@@ -2839,7 +2931,7 @@ var Hash = new JS.Class('Hash', {
       if (!this._buckets.hasOwnProperty(hash)) continue;
       bucket = this._buckets[hash];
       i = bucket.length;
-      while (i--) block.call(context || null, bucket[i]);
+      while (i--) block.call(context, bucket[i]);
     }
     return this;
   },
@@ -2935,7 +3027,7 @@ var Hash = new JS.Class('Hash', {
     if (pair) return pair.value;
 
     if (defaultValue === undefined) throw new Error('key not found');
-    if (typeof defaultValue === 'function') return defaultValue.call(context || null, key);
+    if (typeof defaultValue === 'function') return defaultValue.call(context, key);
     return defaultValue;
   },
 
@@ -2944,7 +3036,7 @@ var Hash = new JS.Class('Hash', {
     block = Enumerable.toFn(block);
 
     this.forEach(function(pair) {
-      block.call(context || null, pair.key);
+      block.call(context, pair.key);
     });
     return this;
   },
@@ -2954,7 +3046,7 @@ var Hash = new JS.Class('Hash', {
     block = Enumerable.toFn(block);
 
     this.forEach(function(pair) {
-      block.call(context || null, pair.key, pair.value);
+      block.call(context, pair.key, pair.value);
     });
     return this;
   },
@@ -2964,7 +3056,7 @@ var Hash = new JS.Class('Hash', {
     block = Enumerable.toFn(block);
 
     this.forEach(function(pair) {
-      block.call(context || null, pair.value);
+      block.call(context, pair.value);
     });
     return this;
   },
@@ -3069,7 +3161,7 @@ var Hash = new JS.Class('Hash', {
     var toRemove = [];
 
     this.forEach(function(pair) {
-      if (block.call(context || null, pair))
+      if (block.call(context, pair))
         toRemove.push(pair.key);
     }, this);
 
@@ -3108,7 +3200,7 @@ var Hash = new JS.Class('Hash', {
     hash.forEach(function(pair) {
       var key = pair.key, value = pair.value;
       if (givenBlock && this.hasKey(key))
-        value = block.call(context || null, key, this.get(key), value);
+        value = block.call(context, key, this.get(key), value);
       this.store(key, value);
     }, this);
   },
@@ -3174,7 +3266,7 @@ var OrderedHash = new JS.Class('OrderedHash', Hash, {
 
     var pair = this._first;
     while (pair) {
-      block.call(context || null, pair);
+      block.call(context, pair);
       pair = pair._next;
     }
   },
@@ -3192,8 +3284,6 @@ var OrderedHash = new JS.Class('OrderedHash', Hash, {
 exports.Hash = Hash;
 exports.OrderedHash = OrderedHash;
 });
-
-
 
 (function(factory) {
   var E  = (typeof exports === 'object'),
@@ -3215,7 +3305,7 @@ var Set = new JS.Class('Set', {
       if (list.forEach) return list.forEach(block, context);
       for (var i = 0, n = list.length; i < n; i++) {
         if (list[i] !== undefined)
-          block.call(context || null, list[i], i);
+          block.call(context, list[i], i);
       }
     }
   },
@@ -3225,7 +3315,7 @@ var Set = new JS.Class('Set', {
   initialize: function(list, block, context) {
     this.clear();
     if (block) this.klass.forEach(list, function(item) {
-      this.add(block.call(context || null, item));
+      this.add(block.call(context, item));
     }, this);
     else this.merge(list);
   },
@@ -3251,7 +3341,7 @@ var Set = new JS.Class('Set', {
 
     var classes = new hash.Hash();
     this.forEach(function(item) {
-      var value = block.call(context || null, item);
+      var value = block.call(context, item);
       if (!classes.hasKey(value)) classes.store(value, new this.klass);
       classes.get(value).add(item);
     }, this);
@@ -3388,7 +3478,7 @@ var Set = new JS.Class('Set', {
     block = Enumerable.toFn(block);
 
     this._members.removeIf(function(pair) {
-      return block.call(context || null, pair.key);
+      return block.call(context, pair.key);
     });
     this.length = this.size = this._members.length;
     return this;
@@ -3506,7 +3596,7 @@ var SortedSet = new JS.Class('SortedSet', Set, {
         i       = members.length;
 
     while (i--) {
-      if (block.call(context || null, members[i]))
+      if (block.call(context, members[i]))
         this.remove(members[i]);
     }
     return this;
@@ -3555,8 +3645,6 @@ exports.Set = exports.HashSet = Set;
 exports.OrderedSet = OrderedSet;
 exports.SortedSet = SortedSet;
 });
-
-
 
 (function(factory) {
   var E  = (typeof exports === 'object'),
@@ -3638,7 +3726,7 @@ var Range = new JS.Class('Range', {
         : function(a,b) { return a !== b };
 
     while (check(needle, this._last)) {
-      block.call(context || null, needle);
+      block.call(context, needle);
       needle = this.klass.succ(needle);
       if (JS.isType(needle, 'string') && needle.length > this._last.length) {
         exclude = true;
@@ -3649,7 +3737,7 @@ var Range = new JS.Class('Range', {
     if (this.klass.compare(needle, this._last) > 0)
       return;
 
-    if (!exclude) block.call(context || null, needle);
+    if (!exclude) block.call(context, needle);
   },
 
   equals: function(other) {
@@ -3685,7 +3773,7 @@ var Range = new JS.Class('Range', {
 
     var i = 0;
     this.forEach(function(member) {
-      if (i % n === 0) block.call(context || null, member);
+      if (i % n === 0) block.call(context, member);
       i += 1;
     });
   },
@@ -3715,8 +3803,6 @@ Range.alias({
 
 exports.Range = Range;
 });
-
-
 
 (function(factory) {
   var E  = (typeof exports === 'object'),
@@ -3831,11 +3917,11 @@ JS.Kernel.include({
     var chain = new MethodChain(), self = this;
 
     if (typeof time === 'number')
-      setTimeout(function() { chain.__exec__(self) }, time * 1000);
+      JS.ENV.setTimeout(function() { chain.__exec__(self) }, time * 1000);
 
     if (this.forEach && typeof time === 'function')
       this.forEach(function(item) {
-        setTimeout(function() { chain.__exec__(item) }, time.apply(this, arguments) * 1000);
+        JS.ENV.setTimeout(function() { chain.__exec__(item) }, time.apply(this, arguments) * 1000);
       });
 
     return chain;
@@ -3958,8 +4044,6 @@ MethodChain.addMethods([
 exports.MethodChain = MethodChain;
 });
 
-
-
 (function(factory) {
   var E  = (typeof exports === 'object'),
       js = (typeof JS === 'undefined') ? require('./core') : JS;
@@ -3976,12 +4060,12 @@ var Observable = new JS.Module('Observable', {
   },
 
   addObserver: function(observer, context) {
-    (this.__observers__ = this.__observers__ || []).push({_block: observer, _context: context || null});
+    (this.__observers__ = this.__observers__ || []).push({_block: observer, _context: context});
   },
 
   removeObserver: function(observer, context) {
     this.__observers__ = this.__observers__ || [];
-    context = context || null;
+    context = context;
     var i = this.countObservers();
     while (i--) {
       if (this.__observers__[i]._block === observer && this.__observers__[i]._context === context) {
@@ -4006,7 +4090,7 @@ var Observable = new JS.Module('Observable', {
       observer = this.__observers__[i];
       block    = observer._block;
       context  = observer._context;
-      if (typeof block === 'function') block.apply(context || null, arguments);
+      if (typeof block === 'function') block.apply(context, arguments);
       else block[context || Observable.DEFAULT_METHOD].apply(block, arguments);
     }
   },
@@ -4028,8 +4112,6 @@ Observable.alias({
 
 exports.Observable = Observable;
 });
-
-
 
 (function(factory) {
   var E  = (typeof exports === 'object'),
@@ -4226,8 +4308,6 @@ StackTrace.addObserver(StackTrace.logger);
 exports.StackTrace = StackTrace;
 });
 
-
-
 (function(factory) {
   var E  = (typeof exports === 'object'),
       js = (typeof JS === 'undefined') ? require('./core') : JS,
@@ -4248,10 +4328,9 @@ exports.StackTrace = StackTrace;
 })(function(JS, Console, DOM, Enumerable, SortedSet, Range, Hash, MethodChain, Comparable, StackTrace, exports) {
 'use strict';
 
-
 var Test = new JS.Module('Test', {
   extend: {
-    asyncTimeout: 10,
+    asyncTimeout: 5,
 
     filter: function(objects, suffix) {
       return Test.Runner.filter(objects, suffix);
@@ -4280,7 +4359,6 @@ var Test = new JS.Module('Test', {
     Unit: new JS.Module({})
   }
 });
-
 
 Test.Unit.extend({
   Observable: new JS.Module({
@@ -4326,7 +4404,6 @@ Test.Unit.extend({
   })
 });
 
-
 Test.Unit.extend({
   AssertionFailedError: new JS.Class(Error, {
     initialize: function(message) {
@@ -4342,7 +4419,7 @@ Test.Unit.extend({
         message = null;
       }
       this.__wrapAssertion__(function() {
-        if (!block.call(context || null)) {
+        if (!block.call(context)) {
           message = this.buildMessage(message || 'assertBlock failed');
           throw new Test.Unit.AssertionFailedError(message);
         }
@@ -4357,6 +4434,13 @@ Test.Unit.extend({
       this.__wrapAssertion__(function() {
         this.assertBlock(this.buildMessage(message, '<?> is not true', bool),
                          function() { return bool });
+      });
+    },
+
+    assertNot: function(bool, message) {
+      this.__wrapAssertion__(function() {
+        this.assertBlock(this.buildMessage(message, '<?> is not false', bool),
+                         function() { return !bool });
       });
     },
 
@@ -4574,7 +4658,6 @@ Test.Unit.extend({
   })
 });
 
-
 Test.Unit.extend({
   AssertionMessage: new JS.Class({
     extend: {
@@ -4640,7 +4723,6 @@ Test.Unit.extend({
   })
 });
 
-
 Test.Unit.extend({
   Failure: new JS.Class({
     initialize: function(testCase, message) {
@@ -4667,7 +4749,6 @@ Test.Unit.extend({
     }
   })
 });
-
 
 Test.Unit.extend({
   Error: new JS.Class({
@@ -4696,7 +4777,6 @@ Test.Unit.extend({
     }
   })
 });
-
 
 Test.Unit.extend({
   TestResult: new JS.Class({
@@ -4767,7 +4847,6 @@ Test.Unit.extend({
   })
 });
 
-
 Test.Unit.extend({
   TestSuite: new JS.Class({
     include: Enumerable,
@@ -4781,12 +4860,12 @@ Test.Unit.extend({
             pinged     = false,
             n          = tests.length,
             i          = -1,
-            breakTime  = new Date().getTime(),
-            setTimeout = this.setTimeout;
+            breakTime  = new JS.Date().getTime(),
+            setTimeout = Test.FakeClock.REAL.setTimeout;
 
         var ping = function() {
           pinged = true;
-          var time = new Date().getTime();
+          var time = new JS.Date().getTime();
 
           if (Console.BROWSER && (time - breakTime) > 1000) {
             breakTime = time;
@@ -4803,22 +4882,15 @@ Test.Unit.extend({
           i += 1;
           if (i === n) {
             looping = false;
-            return continuation && continuation.call(context || null);
+            return continuation && continuation.call(context);
           }
           pinged = false;
-          block.call(context || null, tests[i], ping);
+          block.call(context, tests[i], ping);
           if (!pinged) looping = false;
         };
 
         ping();
-      },
-
-      // Fun fact: in IE, typeof setTimeout === 'object'
-      setTimeout: (function() {
-        return (typeof setTimeout === 'undefined')
-               ? undefined
-               : setTimeout;
-      })()
+      }
     },
 
     initialize: function(metadata, tests) {
@@ -4832,16 +4904,16 @@ Test.Unit.extend({
 
     run: function(result, continuation, callback, context) {
       if (this._metadata.fullName)
-        callback.call(context || null, this.klass.STARTED, this);
+        callback.call(context, this.klass.STARTED, this);
 
       this.forEach(function(test, resume) {
         test.run(result, resume, callback, context)
 
       }, function() {
         if (this._metadata.fullName)
-          callback.call(context || null, this.klass.FINISHED, this);
+          callback.call(context, this.klass.FINISHED, this);
 
-        continuation.call(context || null);
+        continuation.call(context);
 
       }, this);
     },
@@ -4864,7 +4936,6 @@ Test.Unit.extend({
   })
 });
 
-
 Test.Unit.extend({
   TestCase: new JS.Class({
     include: Test.Unit.Assertions,
@@ -4883,6 +4954,55 @@ Test.Unit.extend({
       inherited: function(klass) {
         if (!this.testCases) this.testCases = [];
         this.testCases.push(klass);
+      },
+
+      pushErrorCathcer: function(handler, push) {
+        if (!handler) return;
+        this.popErrorCathcer(false);
+
+        if (Console.NODE)
+          process.addListener('uncaughtException', handler);
+        else if (Console.BROWSER)
+          window.onerror = handler;
+
+        if (push !== false) this.handlers.push(handler);
+        return handler;
+      },
+
+      popErrorCathcer: function(pop) {
+        var handlers = this.handlers,
+            handler  = handlers[handlers.length - 1];
+
+        if (!handler) return;
+
+        if (Console.NODE)
+          process.removeListener('uncaughtException', handler);
+        else if (Console.BROWSER)
+          window.onerror = null;
+
+        if (pop !== false) {
+          handlers.pop();
+          this.pushErrorCathcer(handlers[handlers.length - 1], false);
+        }
+      },
+
+      processError: function(testCase, error) {
+        if (!error) return;
+
+        if (JS.isType(error, Test.Unit.AssertionFailedError))
+          testCase.addFailure(error.message);
+        else
+          testCase.addError(error);
+      },
+
+      runWithExceptionHandlers: function(testCase, _try, _catch, _finally) {
+        try {
+          _try.call(testCase);
+        } catch (e) {
+          if (_catch) _catch.call(testCase, e);
+        } finally {
+          if (_finally) _finally.call(testCase);
+        }
       },
 
       metadata: function() {
@@ -4914,7 +5034,9 @@ Test.Unit.extend({
             child, i, n;
 
         var tests = methodNames.select(function(name) {
-              return /^test./.test(name) && this.filter(fullName + ' ' + name, filter);
+              if (!/^test./.test(name)) return false;
+              name = name.replace(/^test:\W*/ig, '');
+              return this.filter(fullName + ' ' + name, filter);
             }, this).sort();
 
         for (i = 0, n = tests.length; i < n; i++) {
@@ -4956,14 +5078,20 @@ Test.Unit.extend({
     },
 
     run: function(result, continuation, callback, context) {
-      callback.call(context || null, this.klass.STARTED, this);
+      callback.call(context, this.klass.STARTED, this);
       this._result = result;
 
-      var teardown = function() {
-        this.exec('teardown', function() {
-          this.exec(function() { Test.Unit.mocking.verify() }, function() {
+      var teardown = function(error) {
+        this.klass.processError(this, error);
+
+        this.exec('teardown', function(error) {
+          this.klass.processError(this, error);
+
+          this.exec(function() { Test.Unit.mocking.verify() }, function(error) {
+            this.klass.processError(this, error);
+
             result.addRun();
-            callback.call(context || null, this.klass.FINISHED, this);
+            callback.call(context, this.klass.FINISHED, this);
             continuation();
           });
         });
@@ -4990,94 +5118,50 @@ Test.Unit.extend({
           self     = this;
 
       if (arity === 0)
-        return this._runWithExceptionHandlers(function() {
+        return this.klass.runWithExceptionHandlers(this, function() {
           callable.call(this);
           onSuccess.call(this);
-        }, this._processError(onError));
+        }, onError);
 
       var onUncaughtError = function(error) {
-        self.exec(function() {
-          failed = true;
-          this._removeErrorCatcher();
-          if (timeout) JS.ENV.clearTimeout(timeout);
-          throw error;
-        }, onSuccess, onError);
+        failed = true;
+        self.klass.popErrorCathcer();
+        if (timeout) JS.ENV.clearTimeout(timeout);
+        onError.call(self, error);
       };
-      this._addErrorCatcher(onUncaughtError);
+      this.klass.pushErrorCathcer(onUncaughtError);
 
-      this._runWithExceptionHandlers(function() {
-        callable.call(this, function(asyncBlock) {
+      this.klass.runWithExceptionHandlers(this, function() {
+        callable.call(this, function(asyncResult) {
           resumed = true;
-          self._removeErrorCatcher();
+          self.klass.popErrorCathcer();
           if (timeout) JS.ENV.clearTimeout(timeout);
-          if (!failed) self.exec(asyncBlock, onSuccess, onError);
+          if (failed) return;
+
+          if (typeof asyncResult === 'string') asyncResult = new Error(asyncResult);
+
+          if (typeof asyncResult === 'object')
+            onUncaughtError(asyncResult);
+          else if (typeof asyncResult === 'function')
+            self.exec(asyncResult, onSuccess, onError);
+          else
+            self.exec(null, onSuccess, onError);
         });
-      }, this._processError(onError));
+      }, onError);
 
-      if (!resumed && JS.ENV.setTimeout)
-        timeout = JS.ENV.setTimeout(function() {
-          self.exec(function() {
-            failed = true;
-            this._removeErrorCatcher();
-            throw new Error('Timed out after waiting ' + Test.asyncTimeout + ' seconds for test to resume');
-          }, onSuccess, onError);
-        }, Test.asyncTimeout * 1000);
+      if (resumed || !JS.ENV.setTimeout) return;
+
+      timeout = JS.ENV.setTimeout(function() {
+        failed = true;
+        self.klass.popErrorCathcer();
+        var message = 'Timed out after waiting ' + Test.asyncTimeout + ' seconds for test to resume';
+        onError.call(self, new Error(message));
+      }, Test.asyncTimeout * 1000);
     },
 
-    _addErrorCatcher: function(handler, push) {
-      if (!handler) return;
-      this._removeErrorCatcher(false);
+    setup: function() {},
 
-      if (Console.NODE)
-        process.addListener('uncaughtException', handler);
-      else if (Console.BROWSER)
-        window.onerror = handler;
-
-      if (push !== false) this.klass.handlers.push(handler);
-      return handler;
-    },
-
-    _removeErrorCatcher: function(pop) {
-      var handlers = this.klass.handlers,
-          handler  = handlers[handlers.length - 1];
-
-      if (!handler) return;
-
-      if (Console.NODE)
-        process.removeListener('uncaughtException', handler);
-      else if (Console.BROWSER)
-        window.onerror = null;
-
-      if (pop !== false) {
-        handlers.pop();
-        this._addErrorCatcher(handlers[handlers.length - 1], false);
-      }
-    },
-
-    _processError: function(doNext) {
-      return function(e) {
-        if (JS.isType(e, Test.Unit.AssertionFailedError))
-          this.addFailure(e.message);
-        else
-          this.addError(e);
-
-        if (doNext) doNext.call(this);
-      };
-    },
-
-    _runWithExceptionHandlers: function(_try, _catch, _finally) {
-      try {
-        _try.call(this);
-      } catch (e) {
-        if (_catch) _catch.call(this, e);
-      } finally {
-        if (_finally) _finally.call(this);
-      }
-    },
-
-    setup: function(resume) { resume() },
-
-    teardown: function(resume) { resume() },
+    teardown: function() {},
 
     defaultTest: function() {
       return this.flunk('No tests were specified');
@@ -5107,25 +5191,20 @@ Test.Unit.extend({
 
     metadata: function() {
       var klassData = this.klass.metadata(),
-          context   = klassData.context.concat(klassData.shortName),
           shortName = this._methodName.replace(/^test:\W*/ig, '');
 
       return {
-        fullName:   context.concat(shortName).join(' '),
+        fullName:   klassData.fullName + ' ' + shortName,
         shortName:  shortName,
-        context:    context,
+        context:    klassData.context.concat(klassData.shortName),
         size:       this.size()
       };
     }
   })
 });
 
-
 Test.UI.extend({
   Terminal: new JS.Class({
-    OPTIONS: {format: String, test: Array},
-    SHORTS:  {'f': '--format', 't': '--test'},
-
     getOptions: function() {
       var options = {},
           format  = Console.envvar('FORMAT'),
@@ -5135,9 +5214,6 @@ Test.UI.extend({
 
       if (format) options.format = format;
       if (test)   options.test   = [test];
-
-      if (Console.NODE)
-        JS.extend(options, require('nopt')(this.OPTIONS, this.SHORTS));
 
       delete options.argv;
       options.test = options.test || [];
@@ -5156,7 +5232,6 @@ Test.UI.extend({
     }
   })
 });
-
 
 Test.UI.extend({
   Browser: new JS.Class({
@@ -5191,13 +5266,15 @@ Test.UI.extend({
     getReporters: function(options) {
       var reporters = [],
           R         = Test.Reporters,
+          reg       = R._registry,
           browser   = new R.Browser(options),
           reporter;
 
+      reporters.push(new R.Coverage());
       reporters.push(browser);
 
-      for (var name in R) {
-        reporter = R[name] && R[name].create && R[name].create(options, browser);
+      for (var name in reg) {
+        reporter = reg[name] && reg[name].create && reg[name].create(options, browser);
         if (reporter) reporters.push(reporter);
       }
 
@@ -5205,7 +5282,6 @@ Test.UI.extend({
     }
   })
 });
-
 
 Test.Reporters.extend({
   Error: new JS.Class({
@@ -5278,7 +5354,6 @@ Test.Reporters.extend({
 
 Test.Reporters.register('error', Test.Reporters.Error);
 
-
 Test.Reporters.extend({
   Dot: new JS.Class(Test.Reporters.Error, {
     SYMBOLS: {
@@ -5319,309 +5394,6 @@ Test.Reporters.extend({
 
 Test.Reporters.register('dot', Test.Reporters.Dot);
 
-
-Test.Reporters.extend({
-  Progress: new JS.Class(Test.Reporters.Dot, {
-    extend: {
-      CACHE_TIME: 1000
-    },
-
-    startSuite: function(event) {
-      if (!Console.coloring())
-        throw new Error('Cannot use the progress reporter; terminal formatting is not available');
-
-      this._tests  = [];
-      this._faults = [];
-      this._start  = event.timestamp;
-      this._size   = event.size;
-      this._space  = ' ';
-      this._lines  = [''];
-
-      var n = 10;
-      while (n--) this._space = this._space + this._space;
- 
-      this.puts('\n\n\n');
-      this.cursorHide();
-    },
-
-    startTest: function(event) {
-      this._tests.push(event);
-
-      var words = event.fullName.split(/\s+/),
-          width = this._getWidth() - 10,
-          lines = [],
-          line  = '';
-
-      while (words.length > 0) {
-        while (words[0] && line.length + words[0].length + 1 <= width)
-          line += words.shift() + ' ';
-
-        if (words[0]) {
-          lines.push(line);
-          line = '';
-        }
-      }
-      lines.push(line);
-
-      while (lines.length < this._lines.length) lines.push('');
-      this._nextLines = lines;
-      this._draw();
-    },
-
-    endTest: function(event) {},
-
-    addFault: function(event) {
-      this._faults.push(event);
-      this._draw();
-    },
-
-    endSuite: function(event) {
-      this._passed = event.passed;
-      this._draw();
-      this.cursorPrevLine(2);
-      this.cursorShow();
-      this.callSuper();
-    },
-
-    _draw: function() {
-      var cols     = this._getWidth(),
-          fraction = this._tests.length / this._size,
-          test     = this._tests[this._tests.length - 1],
-          blocks   = Math.floor(cols * fraction),
-          percent  = String(Math.floor(100 * fraction)),
-          line, i, n;
-
-      this.cursorPrevLine(2 + this._lines.length);
-      this.reset();
-      this.print('  ');
-
-      if (this._faults.length > 0)
-        this.bgred();
-      else if (this._passed)
-        this.bggreen();
-      else
-        this.bgyellow();
-
-      this.print(this._space.substr(0, blocks));
-      this.bgblack();
-      this.puts(this._space.substr(0, cols - blocks));
-      this.reset();
-
-      if (this._passed !== undefined) {
-        this.eraseScreenForward();
-        return this.puts('');
-      }
-
-      while (percent.length < 2) percent = ' ' + percent;
-      percent = '[' + percent + '%]';
-      this.cursorForward(2 + cols - percent.length);
-      this.puts(percent);
-      this.cursorPrevLine(1);
-
-      this._lines = this._nextLines;
-      for (i = 0, n = this._lines.length; i < n; i++) {
-        line = this._lines[i];
-        this.puts('  ' + line + this._space.substr(0, cols - line.length - 10));
-      }
-
-      this.puts('');
-    },
-
-    _getWidth: function() {
-      var time = new Test.Runner.Date().getTime();
-      if (this._width && time < this._cacheTime + this.klass.CACHE_TIME)
-        return this._width;
-
-      this._cacheTime = new Test.Runner.Date().getTime();
-      return this._width = Console.getDimensions()[0] - 8;
-    }
-  })
-});
-
-Test.Reporters.register('progress', Test.Reporters.Progress);
-
-
-Test.Reporters.extend({
-  Spec: new JS.Class(Test.Reporters.Dot, {
-    extend: {
-      TICK:   '\u2713',
-      CROSS:  '\u2717'
-    },
-
-    startSuite: function(event) {
-      this._faults = [];
-      this._start  = event.timestamp;
-      this._stack  = [];
-
-      this.puts('');
-    },
-
-    startContext: function(event) {
-      if (event.context === null) return;
-      this.puts(this._indent(this._stack.length) + event.shortName);
-      this._stack.push(event.shortName);
-    },
-
-    startTest: function(event) {
-      this._testPassed = true;
-    },
-
-    addFault: function(event) {
-      this._faults.push(event);
-      this._testPassed = false;
-    },
-
-    endTest: function(event) {
-      var indent = this._indent(this._stack.length),
-          color  = this._testPassed ? 'green' : 'red',
-          icon   = this._testPassed ? this.klass.TICK : this.klass.CROSS,
-          number = this._testPassed ? '' : ' (' + this._faults.length + ')';
-
-      this.consoleFormat(color);
-      this.puts(indent + icon + number + ' ' + event.shortName);
-      this.reset();
-    },
-
-    endContext: function(event) {
-      if (event.context === null) return;
-      this._stack.pop();
-    },
-
-    _indent: function(n) {
-      var indent = '';
-      while (n--) indent += '  ';
-      return indent;
-    }
-  })
-});
-
-Test.Reporters.register('spec', Test.Reporters.Spec);
-
-
-Test.Reporters.extend({
-  XML: new JS.Class({
-    include: Console,
-
-    startSuite: function(event) {
-      this._faults = [];
-      this._stack  = [];
-      this._suites = [];
-
-      this.puts('<?xml version="1.0" encoding="UTF-8" ?>');
-      this.puts('<testsuites>');
-    },
-
-    startContext: function(event) {
-      if (event.context === null) return;
-      if (this._stack.length === 0)
-        this._suites.push({
-          name: event.shortName,
-          cases:    [],
-          tests:    0,
-          failures: 0,
-          errors:   0,
-          start:    event.timestamp
-        });
-      this._stack.push(event.shortName);
-    },
-
-    startTest: function(event) {
-      this._suites[this._suites.length - 1].cases.push({
-        name:     event.context.slice(1).concat(event.shortName).join(' '),
-        start:    event.timestamp,
-        failures: []
-      });
-    },
-
-    addFault: function(event) {
-      var suite = this._suites[this._suites.length - 1],
-          test  = suite.cases[suite.cases.length - 1];
-
-      if (event.error.type === 'failure') {
-        suite.failures += 1;
-        test.failures.push({type: 'Failure', error: event.error});
-      } else if (event.error.type === 'error') {
-        suite.errors += 1;
-        test.failures.push({type: 'Error', error: event.error});
-      }
-    },
-
-    endTest: function(event) {
-      var suite = this._suites[this._suites.length - 1],
-          test  = suite.cases[suite.cases.length - 1];
-
-      test.time = (event.timestamp - test.start) / 1000;
-      delete test.start;
-    },
-
-    endContext: function(event) {
-      this._stack.pop();
-      if (this._stack.length > 0) return;
-      var suite = this._suites[this._suites.length - 1];
-      suite.time = (event.timestamp - suite.start) / 1000;
-      delete suite.start;
-
-      var test, failure, ending, i, j, m, n;
-
-      this.puts('    <testsuite name="' + this._xmlStr(suite.name) +
-                             '" tests="' + suite.cases.length +
-                             '" failures="' + suite.failures +
-                             '" errors="' + suite.errors +
-                             '" time="' + suite.time +
-                             '">');
-
-      for (i = 0, n = suite.cases.length; i < n; i++) {
-        test   = suite.cases[i];
-        ending = (test.failures.length === 0) ? ' />' : '>';
-        this.puts('        <testcase classname="' + this._xmlStr(suite.name) +
-                                  '" name="' + this._xmlStr(test.name) +
-                                  '" time="' + test.time +
-                                  '"' + ending);
-
-        for (j = 0, m = test.failures.length; j < m; j++) {
-          failure = test.failures[j];
-          ending  = failure.error.backtrace ? '>' : ' />';
-          this.puts('            <failure type="' + failure.type +
-                                       '" message="' + this._xmlStr(failure.error.message) +
-                                       '"' + ending);
-
-          if (failure.error.backtrace) {
-            this._printBacktrace(failure.error.backtrace);
-            this.puts('            </failure>');
-          }
-        }
-        if (test.failures.length > 0)
-          this.puts('        </testcase>');
-      }
-      this.puts('    </testsuite>');
-    },
-
-    update: function(event) {},
-
-    endSuite: function(event) {
-      this.puts('</testsuites>');
-    },
-
-    _xmlStr: function(string) {
-      return string.replace(/[\s\t\r\n]+/g, ' ')
-                   .replace(/</g, '&lt;')
-                   .replace(/>/g, '&gt;')
-                   .replace(/"/g, '&quot;');
-    },
-
-    _printBacktrace: function(backtrace) {
-      var lines = backtrace.replace(/^\s*|\s*$/g, '').split(/\s*[\r\n]+\s*/);
-      for (var i = 0, n = lines.length; i < n; i++) {
-        this.puts('                ' + this._xmlStr(lines[i]));
-      }
-    }
-  })
-});
-
-Test.Reporters.register('xml', Test.Reporters.XML);
-Test.Reporters.register('junit', Test.Reporters.XML);
-
-
 Test.Reporters.extend({
   JSON: new JS.Class({
     include: Console,
@@ -5633,6 +5405,7 @@ Test.Reporters.extend({
 
     extend: {
       create: function() {
+        if (!JS.ENV.navigator) return;
         if (/\bPhantomJS\b/.test(navigator.userAgent)) return new this();
       },
 
@@ -5676,15 +5449,13 @@ Test.Reporters.extend({
 
 Test.Reporters.register('json', Test.Reporters.JSON);
 
-
 Test.Reporters.extend({
   TAP: new JS.Class({
     extend: {
       HOSTNAME: 'testling',
 
       create: function(options) {
-        var location = JS.ENV.location;
-        if (!location) return;
+        if (!JS.ENV.location) return;
         var parts = location.hostname.split('.');
         if (JS.indexOf(parts, this.HOSTNAME) >= 0) return new this(options);
       }
@@ -5739,7 +5510,6 @@ Test.Reporters.extend({
 
 Test.Reporters.register('tap', Test.Reporters.TAP);
 
-
 Test.Reporters.extend({
   ExitStatus: new JS.Class({
     startSuite: function(event) {},
@@ -5762,6 +5532,7 @@ Test.Reporters.extend({
   })
 });
 
+// http://phantomjs.org/
 
 Test.Reporters.extend({
   PhantomJS: new JS.Class({
@@ -5787,7 +5558,6 @@ Test.Reporters.extend({
     }
   })
 });
-
 
 Test.Reporters.extend({
   Browser: new JS.Class({
@@ -5988,222 +5758,71 @@ Test.Reporters.Browser.extend({
   })
 });
 
-
 Test.Reporters.extend({
-  Buster: new JS.Class({
+  Coverage: new JS.Class({
+    include: Console,
 
-    /*  Missing events:
-        See http://docs.busterjs.org/en/latest/modules/buster-test/runner/
-
-        - context:unsupported
-        - test:setUp
-        - test:async
-        - test:tearDown
-        - test:timeout
-        - test:deferred
-        - uncaughtException
-    */
-
-    extend: {
-      create: function(options) {
-        if (JS.ENV.buster) return new this(options);
-      }
-    },
-
-    startSuite: function(event) {
-      this._contexts = 0;
-      this._stack = [];
-      buster.emit('suite:start');
-    },
-
-    startContext: function(event) {
-      if (event.context === null) return;
-      this._contexts += 1;
-      buster.emit('context:start', {name: event.shortName});
-    },
-
-    startTest: function(event) {
-      this._testPassed = true;
-      buster.emit('test:start', {name: event.shortName});
-    },
-
-    addFault: function(event) {
-      if (!this._testPassed) return;
-      this._testPassed = false;
-
-      if (event.error.type === 'failure') {
-        buster.emit('test:failure', {
-          name: event.test.shortName,
-          error: {message: event.error.message}
-        });
-      }
-      else {
-        buster.emit('test:error', {
-          name: event.test.shortName,
-          error: {
-            message: event.error.message,
-            stack: event.error.backtrace
-          }
-        });
-      }
-    },
-
-    endTest: function(event) {
-      if (!this._testPassed) return;
-      buster.emit('test:success', {name: event.shortName});
-    },
-
-    endContext: function(event) {
-      if (event.context === null) return;
-      buster.emit('context:end', {name: event.fullName});
-    },
-
-    update: function(event) {},
-
-    endSuite: function(event) {
-      buster.emit('suite:end', {
-        ok:         event.passed,
-        contexts:   this._contexts,
-        tests:      event.tests,
-        assertions: event.assertions,
-        failures:   event.failures,
-        errors:     event.errors,
-        timeouts:   0                   // <- TODO
-      });
-    }
-  })
-});
-
-
-Test.Reporters.extend({
-  Testacular: new JS.Class({
-    extend: {
-      create: function(options) {
-        if (JS.ENV.__testacular__) return new this(options);
-      }
-    },
-
-    initialize: function(options) {
-      this._tc = JS.ENV.__testacular__;
-      this._testId = 0;
-    },
-
-    startSuite: function(event) {
-      this._tc.info({total: event.size});
-    },
+    startSuite: function(event) {},
 
     startContext: function(event) {},
 
-    startTest: function(event) {
-      this._faults = [];
-      this._start  = event.timestamp;
-    },
+    startTest: function(event) {},
 
-    addFault: function(event) {
-      var message = event.error.message;
-      if (event.error.backtrace) message += '\n' + event.error.backtrace;
-      this._faults.push(message);
-    },
+    addFault: function(event) {},
 
-    endTest: function(event) {
-      this._tc.result({
-        id:          ++this._testId,
-        description: event.shortName,
-        suite:       event.context,
-        success:     this._faults.length === 0,
-        skipped:     0,
-        time:        event.timestamp - this._start,
-        log:         this._faults
-      });
-    },
+    endTest: function(event) {},
 
     endContext: function(event) {},
 
     update: function(event) {},
 
     endSuite: function(event) {
-      this._tc.complete();
+      var reports = Test.Unit.TestCase.reports;
+      for (var i = 0, n = reports.length; i < n; i++) {
+        this.reset();
+        this.puts('');
+        reports[i].report();
+      }
     }
   })
 });
-
 
 Test.Reporters.extend({
-  Testem: new JS.Class({
-    extend: {
-      SCRIPT_URL: '/testem.js',
-
-      prepare: function(callback, context) {
-        if (!JS.ENV.location) return callback.call(context || null);
-
-        var hash = (location.hash || '').replace(/^#/, '');
-        if (hash !== 'testem') return callback.call(context || null);
-
-        JS.load(this.SCRIPT_URL, function() {
-          callback.call(context || null);
-        });
-      },
-
-      create: function(options) {
-        if (JS.ENV.Testem) return new this(options);
-      }
+  Composite: new JS.Class({
+    initialize: function(reporters) {
+      this._reporters = reporters || [];
     },
 
-    initialize: function() {
-      var self = this;
-      Testem.useCustomAdapter(function(socket) { self._socket = socket });
+    addReporter: function(reporter) {
+      if (!reporter) return;
+      this._reporters.push(reporter);
     },
 
-    startSuite: function(event) {
-      this._results = [];
-      this._testId = 0;
-      this._socket.emit('tests-start');
-    },
-
-    startContext: function(event) {},
-
-    startTest: function(event) {
-      this._testPassed = true;
-      this._faults = [];
-    },
-
-    addFault: function(event) {
-      this._testPassed = false;
-      this._faults.push({
-        passed:     false,
-        message:    event.error.message,
-        stacktrace: event.error.backtrace
-      });
-    },
-
-    endTest: function(event) {
-      var result = {
-        passed: this._testPassed ? 1 : 0,
-        failed: this._testPassed ? 0 : 1,
-        total:  1,
-        id:     ++this._testId,
-        name:   event.fullName,
-        items:  this._faults
-      };
-      this._results.push(result);
-      this._socket.emit('test-result', result);
-    },
-
-    endContext: function(event) {},
-
-    update: function(event) {},
-
-    endSuite: function(event) {
-      this._socket.emit('all-test-results', {
-        passed: event.tests - event.failures - event.errors,
-        failed: event.failures,
-        total:  event.tests,
-        tests:  this._results
-      });
+    removeReporter: function(reporter) {
+      var index = JS.indexOf(this._reporters, reporter);
+      if (index >= 0) this._reporters.splice(index, 1);
     }
   })
 });
 
+(function() {
+  var methods = Test.Reporters.METHODS,
+      n       = methods.length;
+
+  while (n--)
+    (function(i) {
+      var method = methods[i];
+      Test.Reporters.Composite.define(method, function(event) {
+        var fn;
+        for (var i = 0, n = this._reporters.length; i < n; i++) {
+          fn = this._reporters[i][method];
+          if (fn) fn.call(this._reporters[i], event);
+        }
+      });
+    })(n);
+})();
+
+// https://github.com/jquery/testswarm
 
 Test.Reporters.extend({
   TestSwarm: new JS.Class({
@@ -6247,72 +5866,7 @@ Test.Reporters.extend({
   })
 });
 
-
-Test.Reporters.extend({
-  Coverage: new JS.Class({
-    include: Console,
-
-    startSuite: function(event) {},
-
-    startContext: function(event) {},
-
-    startTest: function(event) {},
-
-    addFault: function(event) {},
-
-    endTest: function(event) {},
-
-    endContext: function(event) {},
-
-    update: function(event) {},
-
-    endSuite: function(event) {
-      var reports = Test.Unit.TestCase.reports;
-      for (var i = 0, n = reports.length; i < n; i++) {
-        this.reset();
-        this.puts('');
-        reports[i].report();
-      }
-    }
-  })
-});
-
-
-Test.Reporters.extend({
-  Composite: new JS.Class({
-    initialize: function(reporters) {
-      this._reporters = reporters || [];
-    },
-
-    addReporter: function(reporter) {
-      if (!reporter) return;
-      this._reporters.push(reporter);
-    },
-
-    removeReporter: function(reporter) {
-      var index = JS.indexOf(this._reporters, reporter);
-      if (index >= 0) this._reporters.splice(index, 1);
-    }
-  })
-});
-
-(function() {
-  var methods = Test.Reporters.METHODS,
-      n       = methods.length;
-
-  while (n--)
-    (function(i) {
-      var method = methods[i];
-      Test.Reporters.Composite.define(method, function(event) {
-        var fn;
-        for (var i = 0, n = this._reporters.length; i < n; i++) {
-          fn = this._reporters[i][method];
-          if (fn) fn.call(this._reporters[i], event);
-        }
-      });
-    })(n);
-})();
-
+Test.Reporters.register('testswarm', Test.Reporters.TestSwarm);
 
 Test.extend({
   Context: new JS.Module({
@@ -6357,7 +5911,6 @@ Test.Context.Context.alias({describe: 'context'});
 Test.extend({
   context:  Test.describe
 });
-
 
 Test.Context.LifeCycle = new JS.Module({
   extend: {
@@ -6416,28 +5969,21 @@ Test.Context.LifeCycle = new JS.Module({
   },
 
   setup: function(resume) {
-    var self = this;
-    this.callSuper(function() {
-      if (self.klass.before_should_callbacks[self._methodName])
-        self.klass.before_should_callbacks[self._methodName].call(self);
+    if (this.klass.before_should_callbacks[this._methodName])
+      this.klass.before_should_callbacks[this._methodName].call(this);
 
-      self.runCallbacks('before', 'each', resume);
-    });
+    this.runCallbacks('before', 'each', resume);
   },
 
   teardown: function(resume) {
-    var self = this;
-    this.callSuper(function() {
-      self.runCallbacks('after', 'each', resume);
-    });
+    this.runCallbacks('after', 'each', resume);
   },
 
   runCallbacks: function(callbackType, period, continuation) {
     var callbacks = this.klass.gatherCallbacks(callbackType, period);
 
     Test.Unit.TestSuite.forEach(callbacks, function(callback, resume) {
-      this.exec(callback, resume);
-
+      this.exec(callback, resume, continuation);
     }, continuation, this);
   },
 
@@ -6451,7 +5997,7 @@ Test.Context.LifeCycle = new JS.Module({
         return hash;
       }, this);
 
-      if (continuation) continuation.call(context || null, ivars);
+      if (continuation) continuation.call(context, ivars);
     });
   },
 
@@ -6477,7 +6023,6 @@ Test.Context.LifeCycle = new JS.Module({
     teardown: m('after')
   });
 })();
-
 
 Test.Context.extend({
   SharedBehavior: new JS.Class(JS.Module, {
@@ -6535,9 +6080,8 @@ Test.Unit.TestCase.extend({
   alias('use', ['uses', 'itShouldBehaveLike', 'behavesLike', 'usesExamplesFrom']);
 })();
 
-
 Test.Context.Test = new JS.Module({
-  test: function(name, opts, block) {
+  it: function(name, opts, block) {
     var testName = 'test: ' + name;
 
     if (JS.indexOf(this.instanceMethods(false), testName) >= 0)
@@ -6555,21 +6099,20 @@ Test.Context.Test = new JS.Module({
     this.define(testName, block, {_resolve: false});
   },
 
+  should: function() { return this.it.apply(this, arguments) },
+  test:   function() { return this.it.apply(this, arguments) },
+  tests:  function() { return this.it.apply(this, arguments) },
+
   beforeTest: function(name, block) {
-    this.test(name, {before: block}, function() {});
+    this.it(name, {before: block}, function() {});
   }
 });
 
 Test.Context.Test.alias({
-  it:     'test',
-  should: 'test',
-  tests:  'test',
-
   beforeIt:     'beforeTest',
   beforeShould: 'beforeTest',
   beforeTests:  'beforeTest'
 });
-
 
 (function() {
   var suite = Test.Unit.TestCase.suite;
@@ -6586,7 +6129,7 @@ Test.Context.Test.alias({
 Test.Unit.TestSuite.include({
   run: function(result, continuation, callback, context) {
     if (this._metadata.fullName)
-      callback.call(context || null, this.klass.STARTED, this);
+      callback.call(context, this.klass.STARTED, this);
 
     var withIvars = function(ivarsFromCallback) {
       this.forEach(function(test, resume) {
@@ -6598,9 +6141,9 @@ Test.Unit.TestSuite.include({
       }, function() {
         var afterCallbacks = function() {
           if (this._metadata.fullName)
-            callback.call(context || null, this.klass.FINISHED, this);
+            callback.call(context, this.klass.FINISHED, this);
 
-          continuation.call(context || null);
+          continuation.call(context);
         };
         if (ivarsFromCallback && first.runAllCallbacks)
           first.runAllCallbacks('after', afterCallbacks, this);
@@ -6618,7 +6161,6 @@ Test.Unit.TestSuite.include({
       withIvars.call(this, null);
   }
 });
-
 
 Test.extend({
   Mocking: new JS.Module({
@@ -6804,7 +6346,6 @@ Test.extend({
   })
 });
 
-
 Test.Mocking.extend({
   Parameters: new JS.Class({
     initialize: function(params, expected) {
@@ -6938,7 +6479,6 @@ Test.Mocking.extend({
   })
 });
 
-
 Test.Mocking.extend({
   Anything: new JS.Class({
     equals: function() { return true },
@@ -7027,7 +6567,6 @@ Test.Mocking.extend({
   })
 });
 
-
 Test.Mocking.Stub.include({
   given: function() {
     var matcher = new Test.Mocking.Parameters(arguments, this._expected);
@@ -7115,7 +6654,6 @@ Test.Mocking.extend({
 Test.Unit.TestCase.include(Test.Mocking.DSL);
 Test.Unit.mocking = Test.Mocking;
 
-
 Test.extend({
   AsyncSteps: new JS.Class(JS.Module, {
     define: function(name, method) {
@@ -7129,17 +6667,16 @@ Test.extend({
       klass.include(Test.AsyncSteps.Sync);
       if (!klass.includes(Test.Context)) return;
 
-      klass.after(function(resume) { this.sync(resume) });
-
       klass.extend({
-        after: function(period, block) {
-          if ((typeof period === 'function') || !block) {
-            block  = period;
-            period = 'each';
+        it: function(name, opts, block) {
+          if (typeof opts === 'function') {
+            block = opts;
+            opts  = {};
           }
-          this.callSuper(function(resume) {
-            this.sync(function() {
-              this.exec(block, resume);
+          this.callSuper(name, opts, function(resume) {
+            this.exec(block, function(error) {
+              Test.Unit.TestCase.processError(this, error);
+              this.sync(resume);
             });
           });
         }
@@ -7154,7 +6691,7 @@ Test.extend({
           if (this.__runningSteps__) return;
           this.__runningSteps__ = true;
 
-          var setTimeout = Test.Unit.TestSuite.setTimeout;
+          var setTimeout = Test.FakeClock.REAL.setTimeout;
           setTimeout(this.method('__runNextStep__'), 1);
         },
 
@@ -7181,7 +6718,8 @@ Test.extend({
           this.exec(block, function() {}, this.method('__endSteps__'));
         },
 
-        __endSteps__: function() {
+        __endSteps__: function(error) {
+          Test.Unit.TestCase.processError(this, error);
           this.__stepQueue__ = [];
           this.__runNextStep__();
         },
@@ -7205,14 +6743,15 @@ Test.extend({
   }
 });
 
-
 Test.extend({
   FakeClock: new JS.Module({
     extend: {
       API: new JS.Singleton({
+        METHODS: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'],
+
         stub: function() {
           var mocking = Test.Mocking,
-              methods = ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'],
+              methods = this.METHODS,
               i       = methods.length;
 
           Test.FakeClock.reset();
@@ -7220,7 +6759,7 @@ Test.extend({
           while (i--)
             mocking.stub(methods[i], Test.FakeClock.method(methods[i]));
 
-          Date.now = function() { return new Date() };
+          Date.now = Test.FakeClock.REAL.Date.now;
         },
 
         reset: function() {
@@ -7232,7 +6771,7 @@ Test.extend({
         }
       }),
 
-      JSDate: Date,
+      REAL: {},
 
       Schedule: new JS.Class(SortedSet, {
         nextScheduledAt: function(time) {
@@ -7294,7 +6833,7 @@ Test.extend({
       },
 
       Date: function() {
-        var date = new this.JSDate();
+        var date = new Test.FakeClock.REAL.Date();
         date.setTime(this._callTime);
         return date;
       },
@@ -7322,6 +6861,12 @@ Test.FakeClock.include({
   clock: Test.FakeClock.API
 });
 
+(function() {
+  var methods = Test.FakeClock.API.METHODS,
+      i       = methods.length;
+
+  while (i--) Test.FakeClock.REAL[methods[i]] = JS.ENV[methods[i]];
+})();
 
 Test.extend({
   Coverage: new JS.Class({
@@ -7442,7 +6987,7 @@ Test.extend({
 
     forEach: function(list, block, context) {
       for (var i = 0, n = list.length; i < n; i++) {
-        block.call(context || null, list[i], i);
+        block.call(context, list[i], i);
       }
     },
 
@@ -7460,7 +7005,6 @@ Test.extend({
   })
 });
 
-
 Test.extend({
   Runner: new JS.Class({
     initialize: function(settings) {
@@ -7477,7 +7021,7 @@ Test.extend({
     },
 
     prepare: function(callback, context) {
-      var R    = Test.Reporters,
+      var R    = Test.Reporters._registry,
           n    = 0,
           done = false;
 
@@ -7486,11 +7030,11 @@ Test.extend({
         n += 1;
         R[name].prepare(function() {
           n -= 1;
-          if (n === 0 && done) callback.call(context || null);
+          if (n === 0 && done) callback.call(context);
         });
       }
       done = true;
-      if (n === 0) callback.call(context || null);
+      if (n === 0) callback.call(context);
     },
 
     start: function(ui, callback, context) {
@@ -7499,7 +7043,7 @@ Test.extend({
           suite     = this.getSuite(options);
 
       this.setReporter(new Test.Reporters.Composite(reporters));
-      if (callback) callback.call(context || null, this);
+      if (callback) callback.call(context, this);
 
       var testResult = new Test.Unit.TestResult(),
           TR         = Test.Unit.TestResult,
@@ -7559,11 +7103,9 @@ Test.extend({
     },
 
     extend: {
-      Date: Date,
-
       timestamp: function(event) {
         event.eventId = this.reportEventId++;
-        event.timestamp = new this.Date().getTime();
+        event.timestamp = new JS.Date().getTime();
         return event;
       },
 
@@ -7610,17 +7152,846 @@ Test.extend({
   }
 });
 
-
 exports.Test = Test;
 });
-
-
 
 (function() {
   if (typeof document === 'undefined') return;
   var head  = document.getElementsByTagName('head')[0],
       style = document.createElement('style');
-  style.type = 'text/css';
-  style.innerHTML = '@import url(data:text/css;base64,LnRlc3QtcmVzdWx0LWNvbnRhaW5lciB7CiAgYmFja2dyb3VuZDogICAjZmZmOwogIGJvcmRlcjogICAgICAgMnB4IHNvbGlkICM0NDQ7CiAgY29sb3I6ICAgICAgICAjNDQ0OwogIGZvbnQ6ICAgICAgICAgbm9ybWFsIDE1cHggRnJlZVNhbnMsIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWY7CiAgb3ZlcmZsb3c6ICAgICBoaWRkZW47CiAgcG9zaXRpb246ICAgICBhYnNvbHV0ZTsKICByaWdodDogICAgICAgIDMwcHg7CiAgdG9wOiAgICAgICAgICAzMHB4OwogIHdpZHRoOiAgICAgICAgNjQwcHg7CgogIC13ZWJraXQtYm9yZGVyLXJhZGl1czogMTZweDsKICAgICAtbW96LWJvcmRlci1yYWRpdXM6IDE2cHg7CiAgICAgICAgICBib3JkZXItcmFkaXVzOiAxNnB4Owp9CgoudGVzdC1yZXN1bHQtY29udGFpbmVyIHAsCi50ZXN0LXJlc3VsdC1jb250YWluZXIgdWwsCi50ZXN0LXJlc3VsdC1jb250YWluZXIgbGkgewogIGxpc3Qtc3R5bGU6ICAgY2lyY2xlIG91dHNpZGU7CiAgbWFyZ2luOiAgICAgICAwOwogIHBhZGRpbmc6ICAgICAgMDsKfQoKLnRlc3QtcmVzdWx0LWNvbnRhaW5lciAucmVwb3J0IHsKICBib3JkZXItY29sbGFwc2U6IGNvbGxhcHNlOwogIG1hcmdpbjogICAgICAgMDsKICBwYWRkaW5nOiAgICAgIDA7Cn0KCi50ZXN0LXJlc3VsdC1jb250YWluZXIgLnJlcG9ydCB0aDpmaXJzdC1jaGlsZCB7CiAgLXdlYmtpdC1ib3JkZXItdG9wLWxlZnQtcmFkaXVzOiAxNHB4OwogICAgIC1tb3otYm9yZGVyLXJhZGl1cy10b3BsZWZ0OiAgMTRweDsKICAgICAgICAgIGJvcmRlci10b3AtbGVmdC1yYWRpdXM6IDE0cHg7Cn0KCi50ZXN0LXJlc3VsdC1jb250YWluZXIgLnJlcG9ydCB0aDpsYXN0LWNoaWxkIHsKICAtd2Via2l0LWJvcmRlci10b3AtcmlnaHQtcmFkaXVzOiAxNHB4OwogICAgIC1tb3otYm9yZGVyLXJhZGl1cy10b3ByaWdodDogIDE0cHg7CiAgICAgICAgICBib3JkZXItdG9wLXJpZ2h0LXJhZGl1czogMTRweDsKfQoKLnRlc3QtcmVzdWx0LWNvbnRhaW5lciAucmVwb3J0IHRoLAoudGVzdC1yZXN1bHQtY29udGFpbmVyIC5yZXBvcnQgdGQgewogIGJvcmRlci1sZWZ0OiAgMXB4IHNvbGlkICNjY2M7CiAgYm9yZGVyLXJpZ2h0OiAxcHggc29saWQgI2NjYzsKICBmb250LXdlaWdodDogIGJvbGQ7CiAgcGFkZGluZzogICAgICAwIDhweDsKICB0ZXh0LWFsaWduOiAgIHJpZ2h0OwogIHdpZHRoOiAgICAgICAgMTQ0cHg7Cn0KCi50ZXN0LXJlc3VsdC1jb250YWluZXIgLnJlcG9ydCB0aDpmaXJzdC1jaGlsZCwKLnRlc3QtcmVzdWx0LWNvbnRhaW5lciAucmVwb3J0IHRkOmZpcnN0LWNoaWxkIHsKICBib3JkZXItbGVmdDogbm9uZTsKfQoKLnRlc3QtcmVzdWx0LWNvbnRhaW5lciAucmVwb3J0IHRoOmxhc3QtY2hpbGQsCi50ZXN0LXJlc3VsdC1jb250YWluZXIgLnJlcG9ydCB0ZDpsYXN0LWNoaWxkIHsKICBib3JkZXItcmlnaHQ6IG5vbmU7Cn0KCi50ZXN0LXJlc3VsdC1jb250YWluZXIgLnJlcG9ydCB0aCB7CiAgYmFja2dyb3VuZDogICAjZWVlOwogIHBhZGRpbmc6ICAgICAgNHB4IDhweDsKfQoKLnRlc3QtcmVzdWx0LWNvbnRhaW5lciAucmVwb3J0IHRkIHsKICBjb2xvcjogICAgICAgICM5OTk7CiAgZm9udC1zaXplOiAgICAzMDAlOwp9CgoudGVzdC1yZXN1bHQtY29udGFpbmVyIC5saWdodCB7CiAgZm9udC1zaXplOiAgICAwOwogIGhlaWdodDogICAgICAgNnB4OwogIG92ZXJmbG93OiAgICAgaGlkZGVuOwp9Ci50ZXN0LXJlc3VsdC1jb250YWluZXIgLmxpZ2h0LXBlbmRpbmcgewogIGJhY2tncm91bmQ6ICAgI2ZjNjsKfQoudGVzdC1yZXN1bHQtY29udGFpbmVyIC5saWdodC1wYXNzZWQgewogIGJhY2tncm91bmQ6ICAgIzZjMzsKfQoudGVzdC1yZXN1bHQtY29udGFpbmVyIC5saWdodC1mYWlsZWQgewogIGJhY2tncm91bmQ6ICAgI2U0MDsKfQoKLnRlc3QtcmVzdWx0LWNvbnRhaW5lciAudXNlci1hZ2VudCB7CiAgYmFja2dyb3VuZDogICAjNDQ0OwogIGNvbG9yOiAgICAgICAgI2ZmZjsKICBmb250LXNpemU6ICAgIDgwJTsKICBsaXN0LXN0eWxlOiAgIG5vbmU7CiAgcGFkZGluZzogICAgICA0cHggMTJweDsKfQoKLnRlc3QtcmVzdWx0LWNvbnRhaW5lciAuc3BlY3MgLnNwZWMsCi50ZXN0LXJlc3VsdC1jb250YWluZXIgLnNwZWNzIC50ZXN0IHsKICBwb3NpdGlvbjogICAgIHJlbGF0aXZlOwp9CgoudGVzdC1yZXN1bHQtY29udGFpbmVyIC5zcGVjcyAuc3BlYy1uYW1lLAoudGVzdC1yZXN1bHQtY29udGFpbmVyIC5zcGVjcyAudGVzdC1uYW1lIHsKICBjdXJzb3I6ICAgICAgIHBvaW50ZXI7Cn0KCi50ZXN0LXJlc3VsdC1jb250YWluZXIgLnNwZWMtbmFtZSB7CiAgYm9yZGVyLXRvcDogICAxcHggc29saWQgI2RkZDsKICBjdXJzb3I6ICAgICAgIHBvaW50ZXI7CiAgZm9udC13ZWlnaHQ6ICBib2xkOwp9CgoudGVzdC1yZXN1bHQtY29udGFpbmVyIC5zcGVjcyB1bCB7CiAgbWFyZ2luLWxlZnQ6ICAzMnB4Owp9CgoudGVzdC1yZXN1bHQtY29udGFpbmVyIC5zcGVjcyBwIHsKICBwYWRkaW5nOiAgICAgIDRweCAxMnB4Owp9CgoudGVzdC1yZXN1bHQtY29udGFpbmVyIC5zcGVjcyAucnVubmVyIHsKICBiYWNrZ3JvdW5kOiAgIHVybChkYXRhOmltYWdlL3BuZztiYXNlNjQsaVZCT1J3MEtHZ29BQUFBTlNVaEVVZ0FBQUJBQUFBQVFDQVlBQUFBZjgvOWhBQUFBQkdkQlRVRUFBSy9JTndXSzZRQUFBQmwwUlZoMFUyOW1kSGRoY21VQVFXUnZZbVVnU1cxaFoyVlNaV0ZrZVhISlpUd0FBQUVzU1VSQlZEakxZL2ovL3o4REpaaGhtQnVRdmRqOGErcDh3Ly94YzNVNXlUSWdlYjdoMThiTlVmL0RaMmo4OTU4cXowblFnUHlsdHY5ekY1di9UVjlvL0RkeHJ2N2ZtdldoLzFlZG52aS9aTFgvZjlkKzhiKzIzWUk4ZUEwQU92bi9oblBUL3E4OU93V3NjY1hwQ2Y4bjdDbjV2L0I0MS8rTXBXNy9UZHZaLytvMk0vTGpOQURvWkxEbXZsMzUvenQzWlA5djNaYjJ2MkZ6NHYrbXJlbi9aeHhxL2grendPYS9hajNESDV3R1JNL1cvTC95MUlUL1MwLzAvbDk0ck92L3ZLTWRRRU95L2s4LzFQUS9iYW5IZjhWYWhsZlNsUXdHT0EwSW5LNzR6M09pOUQvbmZ0Ri8xdDM4LytMbVcvMmZkckRoZjlKaXQvL3l0UXpQSlNzWnRFaUtCZTFteHEveEM1My95MWN6UEFGcVZpYzVHb0ZPL2lwWHpmeGZ0SkpCa2V5VUtGek93RG00OHdJQWg1WEgrZzdkck93QUFBQUFTVVZPUks1Q1lJST0pIGNlbnRlciBjZW50ZXIgbm8tcmVwZWF0OwogIGN1cnNvcjogICAgICAgcG9pbnRlcjsKICBkaXNwbGF5OiAgICAgIGJsb2NrOwogIGZsb2F0OiAgICAgICAgbGVmdDsKICBoZWlnaHQ6ICAgICAgIDA7CiAgbWFyZ2luLXJpZ2h0OiA2cHg7CiAgb3ZlcmZsb3c6ICAgICBoaWRkZW47CiAgcGFkZGluZy10b3A6ICAxOHB4OwogIHdpZHRoOiAgICAgICAgMTZweDsKfQoKLnRlc3QtcmVzdWx0LWNvbnRhaW5lciAuc3BlY3MgLmZhdWx0IHsKICBmb250LXNpemU6ICAgIDc1JTsKfQoKLnRlc3QtcmVzdWx0LWNvbnRhaW5lciAuc3BlY3MgLmZhaWxlZCB7CiAgY29sb3I6ICAgICAgICAjZTQwOwp9CgoudGVzdC1yZXN1bHQtY29udGFpbmVyIC5zcGVjcyAuY2xvc2VkIHVsLmNoaWxkcmVuIHsKICBkaXNwbGF5OiAgICAgIG5vbmU7Cn0KCi50ZXN0LXJlc3VsdC1jb250YWluZXIgLnRlc3QgLnN0YXRzIHsKICBkaXNwbGF5OiAgICAgIG5vbmU7Cn0KCi50ZXN0LXJlc3VsdC1jb250YWluZXIgLnN0YXRzIHsKICBmbG9hdDogICAgICAgIHJpZ2h0OwogIGxpc3Qtc3R5bGU6ICAgbm9uZTsKICByaWdodDogICAgICAgIDA7CiAgdG9wOiAgICAgICAgICAwOwp9CgoudGVzdC1yZXN1bHQtY29udGFpbmVyIC5zdGF0cyBsaSB7CiAgYm9yZGVyLWxlZnQ6ICAxcHggc29saWQgI2VlZTsKICBkaXNwbGF5OiAgICAgIGJsb2NrOwogIGZsb2F0OiAgICAgICAgbGVmdDsKICBsaXN0LXN0eWxlOiAgIG5vbmU7CiAgcGFkZGluZzogICAgICA0cHggOHB4OwogIHdpZHRoOiAgICAgICAgNjRweDsKfQoKLnRlc3QtcmVzdWx0LWNvbnRhaW5lciAuc3RhdHMgLm51bWJlciB7CiAgY29sb3I6ICAgICAgICAjNjY2OwogIGZvbnQtd2VpZ2h0OiAgYm9sZDsKfQoKLnRlc3QtcmVzdWx0LWNvbnRhaW5lciAuc3RhdHMgLmxhYmVsIHsKICBjb2xvcjogICAgICAgICM5OTk7CiAgZm9udC1zaXplOiAgICA4MCU7Cn0KCi50ZXN0LXJlc3VsdC1jb250YWluZXIgLnBhc3NlZCAubnVtYmVyIHsKICBjb2xvcjogICAgICAgICM2YzM7Cn0KCi50ZXN0LXJlc3VsdC1jb250YWluZXIgLnN1bW1hcnkgewogIGJvcmRlci10b3A6ICAgMXB4IHNvbGlkICM5OTk7CiAgY29sb3I6ICAgICAgICAjNjY2OwogIG1hcmdpbjogICAgICAgMDsKICBwYWRkaW5nOiAgICAgIDRweCAxMnB4Owp9Cgo=)';
-  head.appendChild(style);
+  try {
+    style.type = 'text/css';
+    style.innerHTML = '@import url(data:text/css;base64,LnRlc3QtcmVzdWx0LWNvbnRhaW5lciB7CiAgYmFja2dyb3VuZDogICAjZmZmOwogIGJvcmRlcjogICAgICAgMnB4IHNvbGlkICM0NDQ7CiAgY29sb3I6ICAgICAgICAjNDQ0OwogIGZvbnQ6ICAgICAgICAgbm9ybWFsIDE1cHggRnJlZVNhbnMsIEhlbHZldGljYSwgQXJpYWwsIHNhbnMtc2VyaWY7CiAgb3ZlcmZsb3c6ICAgICBoaWRkZW47CiAgcG9zaXRpb246ICAgICBhYnNvbHV0ZTsKICByaWdodDogICAgICAgIDMwcHg7CiAgdG9wOiAgICAgICAgICAzMHB4OwogIHdpZHRoOiAgICAgICAgNjQwcHg7CgogIC13ZWJraXQtYm9yZGVyLXJhZGl1czogMTZweDsKICAgICAtbW96LWJvcmRlci1yYWRpdXM6IDE2cHg7CiAgICAgICAgICBib3JkZXItcmFkaXVzOiAxNnB4Owp9CgoudGVzdC1yZXN1bHQtY29udGFpbmVyIHAsCi50ZXN0LXJlc3VsdC1jb250YWluZXIgdWwsCi50ZXN0LXJlc3VsdC1jb250YWluZXIgbGkgewogIGxpc3Qtc3R5bGU6ICAgY2lyY2xlIG91dHNpZGU7CiAgbWFyZ2luOiAgICAgICAwOwogIHBhZGRpbmc6ICAgICAgMDsKfQoKLnRlc3QtcmVzdWx0LWNvbnRhaW5lciAucmVwb3J0IHsKICBib3JkZXItY29sbGFwc2U6IGNvbGxhcHNlOwogIG1hcmdpbjogICAgICAgMDsKICBwYWRkaW5nOiAgICAgIDA7Cn0KCi50ZXN0LXJlc3VsdC1jb250YWluZXIgLnJlcG9ydCB0aDpmaXJzdC1jaGlsZCB7CiAgLXdlYmtpdC1ib3JkZXItdG9wLWxlZnQtcmFkaXVzOiAxNHB4OwogICAgIC1tb3otYm9yZGVyLXJhZGl1cy10b3BsZWZ0OiAgMTRweDsKICAgICAgICAgIGJvcmRlci10b3AtbGVmdC1yYWRpdXM6IDE0cHg7Cn0KCi50ZXN0LXJlc3VsdC1jb250YWluZXIgLnJlcG9ydCB0aDpsYXN0LWNoaWxkIHsKICAtd2Via2l0LWJvcmRlci10b3AtcmlnaHQtcmFkaXVzOiAxNHB4OwogICAgIC1tb3otYm9yZGVyLXJhZGl1cy10b3ByaWdodDogIDE0cHg7CiAgICAgICAgICBib3JkZXItdG9wLXJpZ2h0LXJhZGl1czogMTRweDsKfQoKLnRlc3QtcmVzdWx0LWNvbnRhaW5lciAucmVwb3J0IHRoLAoudGVzdC1yZXN1bHQtY29udGFpbmVyIC5yZXBvcnQgdGQgewogIGJvcmRlci1sZWZ0OiAgMXB4IHNvbGlkICNjY2M7CiAgYm9yZGVyLXJpZ2h0OiAxcHggc29saWQgI2NjYzsKICBmb250LXdlaWdodDogIGJvbGQ7CiAgcGFkZGluZzogICAgICAwIDhweDsKICB0ZXh0LWFsaWduOiAgIHJpZ2h0OwogIHdpZHRoOiAgICAgICAgMTQ0cHg7Cn0KCi50ZXN0LXJlc3VsdC1jb250YWluZXIgLnJlcG9ydCB0aDpmaXJzdC1jaGlsZCwKLnRlc3QtcmVzdWx0LWNvbnRhaW5lciAucmVwb3J0IHRkOmZpcnN0LWNoaWxkIHsKICBib3JkZXItbGVmdDogbm9uZTsKfQoKLnRlc3QtcmVzdWx0LWNvbnRhaW5lciAucmVwb3J0IHRoOmxhc3QtY2hpbGQsCi50ZXN0LXJlc3VsdC1jb250YWluZXIgLnJlcG9ydCB0ZDpsYXN0LWNoaWxkIHsKICBib3JkZXItcmlnaHQ6IG5vbmU7Cn0KCi50ZXN0LXJlc3VsdC1jb250YWluZXIgLnJlcG9ydCB0aCB7CiAgYmFja2dyb3VuZDogICAjZWVlOwogIHBhZGRpbmc6ICAgICAgNHB4IDhweDsKfQoKLnRlc3QtcmVzdWx0LWNvbnRhaW5lciAucmVwb3J0IHRkIHsKICBjb2xvcjogICAgICAgICM5OTk7CiAgZm9udC1zaXplOiAgICAzMDAlOwp9CgoudGVzdC1yZXN1bHQtY29udGFpbmVyIC5saWdodCB7CiAgZm9udC1zaXplOiAgICAwOwogIGhlaWdodDogICAgICAgNnB4OwogIG92ZXJmbG93OiAgICAgaGlkZGVuOwp9Ci50ZXN0LXJlc3VsdC1jb250YWluZXIgLmxpZ2h0LXBlbmRpbmcgewogIGJhY2tncm91bmQ6ICAgI2ZjNjsKfQoudGVzdC1yZXN1bHQtY29udGFpbmVyIC5saWdodC1wYXNzZWQgewogIGJhY2tncm91bmQ6ICAgIzZjMzsKfQoudGVzdC1yZXN1bHQtY29udGFpbmVyIC5saWdodC1mYWlsZWQgewogIGJhY2tncm91bmQ6ICAgI2U0MDsKfQoKLnRlc3QtcmVzdWx0LWNvbnRhaW5lciAudXNlci1hZ2VudCB7CiAgYmFja2dyb3VuZDogICAjNDQ0OwogIGNvbG9yOiAgICAgICAgI2ZmZjsKICBmb250LXNpemU6ICAgIDgwJTsKICBsaXN0LXN0eWxlOiAgIG5vbmU7CiAgcGFkZGluZzogICAgICA0cHggMTJweDsKfQoKLnRlc3QtcmVzdWx0LWNvbnRhaW5lciAuc3BlY3MgLnNwZWMsCi50ZXN0LXJlc3VsdC1jb250YWluZXIgLnNwZWNzIC50ZXN0IHsKICBwb3NpdGlvbjogICAgIHJlbGF0aXZlOwp9CgoudGVzdC1yZXN1bHQtY29udGFpbmVyIC5zcGVjcyAuc3BlYy1uYW1lLAoudGVzdC1yZXN1bHQtY29udGFpbmVyIC5zcGVjcyAudGVzdC1uYW1lIHsKICBjdXJzb3I6ICAgICAgIHBvaW50ZXI7Cn0KCi50ZXN0LXJlc3VsdC1jb250YWluZXIgLnNwZWMtbmFtZSB7CiAgYm9yZGVyLXRvcDogICAxcHggc29saWQgI2RkZDsKICBjdXJzb3I6ICAgICAgIHBvaW50ZXI7CiAgZm9udC13ZWlnaHQ6ICBib2xkOwp9CgoudGVzdC1yZXN1bHQtY29udGFpbmVyIC5zcGVjcyB1bCB7CiAgbWFyZ2luLWxlZnQ6ICAzMnB4Owp9CgoudGVzdC1yZXN1bHQtY29udGFpbmVyIC5zcGVjcyBwIHsKICBwYWRkaW5nOiAgICAgIDRweCAxMnB4Owp9CgoudGVzdC1yZXN1bHQtY29udGFpbmVyIC5zcGVjcyAucnVubmVyIHsKICBiYWNrZ3JvdW5kOiAgIHVybChkYXRhOmltYWdlL3BuZztiYXNlNjQsaVZCT1J3MEtHZ29BQUFBTlNVaEVVZ0FBQUJBQUFBQVFDQVlBQUFBZjgvOWhBQUFBQkdkQlRVRUFBSy9JTndXSzZRQUFBQmwwUlZoMFUyOW1kSGRoY21VQVFXUnZZbVVnU1cxaFoyVlNaV0ZrZVhISlpUd0FBQUVzU1VSQlZEakxZL2ovL3o4REpaaGhtQnVRdmRqOGErcDh3Ly94YzNVNXlUSWdlYjdoMThiTlVmL0RaMmo4OTU4cXowblFnUHlsdHY5ekY1di9UVjlvL0RkeHJ2N2ZtdldoLzFlZG52aS9aTFgvZjlkKzhiKzIzWUk4ZUEwQU92bi9oblBUL3E4OU93V3NjY1hwQ2Y4bjdDbjV2L0I0MS8rTXBXNy9UZHZaLytvMk0vTGpOQURvWkxEbXZsMzUvenQzWlA5djNaYjJ2MkZ6NHYrbXJlbi9aeHhxL2grendPYS9hajNESDV3R1JNL1cvTC95MUlUL1MwLzAvbDk0ck92L3ZLTWRRRU95L2s4LzFQUS9iYW5IZjhWYWhsZlNsUXdHT0EwSW5LNzR6M09pOUQvbmZ0Ri8xdDM4LytMbVcvMmZkckRoZjlKaXQvL3l0UXpQSlNzWnRFaUtCZTFteHEveEM1My95MWN6UEFGcVZpYzVHb0ZPL2lwWHpmeGZ0SkpCa2V5VUtGek93RG00OHdJQWg1WEgrZzdkck93QUFBQUFTVVZPUks1Q1lJST0pIGNlbnRlciBjZW50ZXIgbm8tcmVwZWF0OwogIGN1cnNvcjogICAgICAgcG9pbnRlcjsKICBkaXNwbGF5OiAgICAgIGJsb2NrOwogIGZsb2F0OiAgICAgICAgbGVmdDsKICBoZWlnaHQ6ICAgICAgIDA7CiAgbWFyZ2luLXJpZ2h0OiA2cHg7CiAgb3ZlcmZsb3c6ICAgICBoaWRkZW47CiAgcGFkZGluZy10b3A6ICAxOHB4OwogIHdpZHRoOiAgICAgICAgMTZweDsKfQoKLnRlc3QtcmVzdWx0LWNvbnRhaW5lciAuc3BlY3MgLmZhdWx0IHsKICBmb250LXNpemU6ICAgIDc1JTsKfQoKLnRlc3QtcmVzdWx0LWNvbnRhaW5lciAuc3BlY3MgLmZhaWxlZCB7CiAgY29sb3I6ICAgICAgICAjZTQwOwp9CgoudGVzdC1yZXN1bHQtY29udGFpbmVyIC5zcGVjcyAuY2xvc2VkIHVsLmNoaWxkcmVuIHsKICBkaXNwbGF5OiAgICAgIG5vbmU7Cn0KCi50ZXN0LXJlc3VsdC1jb250YWluZXIgLnRlc3QgLnN0YXRzIHsKICBkaXNwbGF5OiAgICAgIG5vbmU7Cn0KCi50ZXN0LXJlc3VsdC1jb250YWluZXIgLnN0YXRzIHsKICBmbG9hdDogICAgICAgIHJpZ2h0OwogIGxpc3Qtc3R5bGU6ICAgbm9uZTsKICByaWdodDogICAgICAgIDA7CiAgdG9wOiAgICAgICAgICAwOwp9CgoudGVzdC1yZXN1bHQtY29udGFpbmVyIC5zdGF0cyBsaSB7CiAgYm9yZGVyLWxlZnQ6ICAxcHggc29saWQgI2VlZTsKICBkaXNwbGF5OiAgICAgIGJsb2NrOwogIGZsb2F0OiAgICAgICAgbGVmdDsKICBsaXN0LXN0eWxlOiAgIG5vbmU7CiAgcGFkZGluZzogICAgICA0cHggOHB4OwogIHdpZHRoOiAgICAgICAgNjRweDsKfQoKLnRlc3QtcmVzdWx0LWNvbnRhaW5lciAuc3RhdHMgLm51bWJlciB7CiAgY29sb3I6ICAgICAgICAjNjY2OwogIGZvbnQtd2VpZ2h0OiAgYm9sZDsKfQoKLnRlc3QtcmVzdWx0LWNvbnRhaW5lciAuc3RhdHMgLmxhYmVsIHsKICBjb2xvcjogICAgICAgICM5OTk7CiAgZm9udC1zaXplOiAgICA4MCU7Cn0KCi50ZXN0LXJlc3VsdC1jb250YWluZXIgLnBhc3NlZCAubnVtYmVyIHsKICBjb2xvcjogICAgICAgICM2YzM7Cn0KCi50ZXN0LXJlc3VsdC1jb250YWluZXIgLnN1bW1hcnkgewogIGJvcmRlci10b3A6ICAgMXB4IHNvbGlkICM5OTk7CiAgY29sb3I6ICAgICAgICAjNjY2OwogIG1hcmdpbjogICAgICAgMDsKICBwYWRkaW5nOiAgICAgIDRweCAxMnB4Owp9Cgo=)';
+    head.appendChild(style);
+  } catch (e) {}
+})();
+
+(function() {
+  var Test    = JS.Test,
+      Console = JS.Console;
+
+// http://busterjs.org/
+
+Test.Reporters.extend({
+  Buster: new JS.Class({
+
+    /*  Missing events:
+        See http://docs.busterjs.org/en/latest/modules/buster-test/runner/
+
+        - context:unsupported
+        - test:setUp
+        - test:async
+        - test:tearDown
+        - test:timeout
+        - test:deferred
+        - uncaughtException
+    */
+
+    extend: {
+      create: function(options) {
+        if (JS.ENV.buster) return new this(options);
+      }
+    },
+
+    startSuite: function(event) {
+      this._contexts = 0;
+      this._stack = [];
+      buster.emit('suite:start');
+    },
+
+    startContext: function(event) {
+      if (event.context === null) return;
+      this._contexts += 1;
+      buster.emit('context:start', {name: event.shortName});
+    },
+
+    startTest: function(event) {
+      this._testPassed = true;
+      buster.emit('test:start', {name: event.shortName});
+    },
+
+    addFault: function(event) {
+      if (!this._testPassed) return;
+      this._testPassed = false;
+
+      if (event.error.type === 'failure') {
+        buster.emit('test:failure', {
+          name: event.test.shortName,
+          error: {message: event.error.message}
+        });
+      }
+      else {
+        buster.emit('test:error', {
+          name: event.test.shortName,
+          error: {
+            message: event.error.message,
+            stack: event.error.backtrace
+          }
+        });
+      }
+    },
+
+    endTest: function(event) {
+      if (!this._testPassed) return;
+      buster.emit('test:success', {name: event.shortName});
+    },
+
+    endContext: function(event) {
+      if (event.context === null) return;
+      buster.emit('context:end', {name: event.fullName});
+    },
+
+    update: function(event) {},
+
+    endSuite: function(event) {
+      buster.emit('suite:end', {
+        ok:         event.passed,
+        contexts:   this._contexts,
+        tests:      event.tests,
+        assertions: event.assertions,
+        failures:   event.failures,
+        errors:     event.errors,
+        timeouts:   0                   // <- TODO
+      });
+    }
+  })
+});
+
+Test.Reporters.register('buster', Test.Reporters.Buster);
+
+// https://github.com/karma-runner/karma
+
+Test.Reporters.extend({
+  Karma: new JS.Class({
+    extend: {
+      create: function(options) {
+        if (JS.ENV.__karma__) return new this(options);
+      }
+    },
+
+    initialize: function(options) {
+      this._karma  = JS.ENV.__karma__;
+      this._testId = 0;
+    },
+
+    startSuite: function(event) {
+      this._karma.info({total: event.size});
+    },
+
+    startContext: function(event) {},
+
+    startTest: function(event) {
+      this._faults = [];
+      this._start  = event.timestamp;
+    },
+
+    addFault: function(event) {
+      var message = event.error.message;
+      if (event.error.backtrace) message += '\n' + event.error.backtrace;
+      this._faults.push(message);
+    },
+
+    endTest: function(event) {
+      this._karma.result({
+        id:          ++this._testId,
+        description: event.shortName,
+        suite:       event.context,
+        success:     this._faults.length === 0,
+        skipped:     0,
+        time:        event.timestamp - this._start,
+        log:         this._faults
+      });
+    },
+
+    endContext: function(event) {},
+
+    update: function(event) {},
+
+    endSuite: function(event) {
+      this._karma.complete();
+    }
+  })
+});
+
+Test.Reporters.register('karma', Test.Reporters.Karma);
+
+Test.Reporters.extend({
+  Progress: new JS.Class(Test.Reporters.Dot, {
+    extend: {
+      CACHE_TIME: 1000
+    },
+
+    startSuite: function(event) {
+      if (!Console.coloring())
+        throw new Error('Cannot use the progress reporter; terminal formatting is not available');
+
+      this._tests  = [];
+      this._faults = [];
+      this._start  = event.timestamp;
+      this._size   = event.size;
+      this._pipe   = '|';
+      this._space  = ' ';
+      this._lines  = [''];
+
+      var n = 10;
+      while (n--) {
+        this._space = this._space + this._space;
+        this._pipe = this._pipe + this._pipe;
+      }
+ 
+      this.puts('\n\n\n');
+      this.cursorHide();
+    },
+
+    startTest: function(event) {
+      this._tests.push(event);
+
+      var words = event.fullName.split(/\s+/),
+          width = this._getWidth() - 10,
+          lines = [],
+          line  = '';
+
+      while (words.length > 0) {
+        while (words[0] && line.length + words[0].length + 1 <= width)
+          line += words.shift() + ' ';
+
+        if (words[0]) {
+          lines.push(line);
+          line = '';
+        }
+      }
+      lines.push(line);
+
+      while (lines.length < this._lines.length) lines.push('');
+      this._nextLines = lines;
+      this._draw();
+    },
+
+    endTest: function(event) {},
+
+    addFault: function(event) {
+      this._faults.push(event);
+      this._draw();
+    },
+
+    endSuite: function(event) {
+      this._passed = event.passed;
+      this._draw();
+      this.cursorPrevLine(2);
+      this.cursorShow();
+      this.callSuper();
+    },
+
+    _draw: function() {
+      var cols     = this._getWidth(),
+          fraction = this._tests.length / this._size,
+          test     = this._tests[this._tests.length - 1],
+          blocks   = Math.floor(cols * fraction),
+          percent  = String(Math.floor(100 * fraction)),
+          line, i, n;
+
+      this.cursorPrevLine(2 + this._lines.length);
+      this.reset();
+      this.print('  ');
+
+      if (this._faults.length > 0)
+        this.red();
+      else if (this._passed)
+        this.green();
+      else
+        this.cyan();
+
+      this.bold();
+      this.puts(this._pipe.substr(0, blocks));
+      this.reset();
+
+      if (this._passed !== undefined) {
+        this.eraseScreenForward();
+        return this.puts('');
+      }
+
+      while (percent.length < 2) percent = ' ' + percent;
+      percent = '[' + percent + '%]';
+      this.cursorForward(2 + cols - percent.length);
+      this.puts(percent);
+      this.cursorPrevLine(1);
+
+      this._lines = this._nextLines;
+      for (i = 0, n = this._lines.length; i < n; i++) {
+        line = this._lines[i];
+        this.puts('  ' + line + this._space.substr(0, cols - line.length - 10));
+      }
+
+      this.puts('');
+    },
+
+    _getWidth: function() {
+      var time = new JS.Date().getTime();
+      if (this._width && time < this._cacheTime + this.klass.CACHE_TIME)
+        return this._width;
+
+      this._cacheTime = new JS.Date().getTime();
+      return this._width = Console.getDimensions()[0] - 8;
+    }
+  })
+});
+
+Test.Reporters.register('progress', Test.Reporters.Progress);
+
+Test.Reporters.extend({
+  Spec: new JS.Class(Test.Reporters.Dot, {
+    extend: {
+      TICK:   '\u2713',
+      CROSS:  '\u2717'
+    },
+
+    startSuite: function(event) {
+      this._faults = [];
+      this._start  = event.timestamp;
+      this._stack  = [];
+
+      this.puts('');
+    },
+
+    startContext: function(event) {
+      if (event.context === null) return;
+      this.puts(this._indent(this._stack.length) + event.shortName);
+      this._stack.push(event.shortName);
+    },
+
+    startTest: function(event) {
+      this._testPassed = true;
+    },
+
+    addFault: function(event) {
+      this._faults.push(event);
+      this._testPassed = false;
+    },
+
+    endTest: function(event) {
+      var indent = this._indent(this._stack.length),
+          color  = this._testPassed ? 'green' : 'red',
+          icon   = this._testPassed ? this.klass.TICK : this.klass.CROSS,
+          number = this._testPassed ? '' : ' (' + this._faults.length + ')';
+
+      this.consoleFormat(color);
+      this.puts(indent + icon + number + ' ' + event.shortName);
+      this.reset();
+    },
+
+    endContext: function(event) {
+      if (event.context === null) return;
+      this._stack.pop();
+    },
+
+    _indent: function(n) {
+      var indent = '';
+      while (n--) indent += '  ';
+      return indent;
+    }
+  })
+});
+
+Test.Reporters.register('spec', Test.Reporters.Spec);
+
+// http://rubydoc.info/github/rubyworks/tapout/file/TAP-YJ.md
+
+Test.Reporters.extend({
+  TAP_YJ: new JS.Class({
+    STATUSES: {
+      failure: 'fail',
+      error:   'error'
+    },
+
+    startSuite: function(event) {
+      this._write({
+        type:  'suite',
+        start: this._timestamp(),
+        count: event.size,
+        rev:   2
+      });
+      this._start = event.timestamp;
+    },
+
+    startContext: function(event) {
+      this._write({
+        type:  'case',
+        label: event.shortName,
+        level: event.context.length
+      });
+    },
+
+    startTest: function(event) {
+      this._faults = [];
+      this._status = null;
+    },
+
+    addFault: function(event) {
+      this._faults.push(event);
+      this._status = this._status || this.STATUSES[event.error.type];
+    },
+
+    endTest: function(event) {
+      var payload = {
+        type:   'test',
+        status: this._status || 'pass',
+        label:  event.shortName,
+        time:   this._ellapsedTime(event.timestamp)
+      };
+
+      var fault = this._faults[0];
+      if (fault)
+        payload.exception = {
+          message:   fault.error.message,
+          backtrace: fault.error.backtrace ? fault.error.backtrace.split('\n') : []
+        };
+
+      this._write(payload);
+    },
+
+    endContext: function(event) {},
+
+    update: function(event) {},
+
+    endSuite: function(event) {
+      this._write({
+        type: 'final',
+        time: this._ellapsedTime(event.timestamp),
+        counts: {
+          total: event.tests,
+          pass:  event.tests - event.failures - event.errors,
+          fail:  event.failures,
+          error: event.errors
+        }
+      });
+    },
+
+    _ellapsedTime: function(timestamp) {
+      return (timestamp - this._start) / 1000;
+    },
+
+    _write: function(object) {
+      Console.puts(this._serialize(object));
+    },
+
+    _timestamp: function() {
+      var date   = new JS.Date(),
+          year   = date.getFullYear(),
+          month  = this._pad(date.getMonth() + 1),
+          day    = this._pad(date.getDay()),
+          hour   = this._pad(date.getHours()),
+          minute = this._pad(date.getMinutes()),
+          second = this._pad(date.getSeconds());
+
+      return year + '-' + month + '-' + day + ' ' + hour + ':' + minute + ':' + second;
+    },
+
+    _pad: function(value) {
+      var string = value.toString();
+      while (string.length < 2) string = '0' + string;
+      return string;
+    }
+  })
+});
+
+Test.Reporters.extend({
+  TAP_YAML: new JS.Class(Test.Reporters.TAP_YJ, {
+    _serialize: function(value, level) {
+      level = level || 0;
+
+      var out = '';
+      if (level === 0) out = '---';
+
+      if      (value instanceof Array)    out += this._array(value, level);
+      else if (typeof value === 'object') out += this._object(value, level);
+      else if (typeof value === 'string') out += this._string(value, level);
+      else if (typeof value === 'number') out += this._number(value, level);
+
+      return out;
+    },
+
+    _array: function(value, level) {
+      if (value.length === 0) return '[]';
+      var out = '', indent = this._indent(level);
+      for (var i = 0, n = value.length; i < n; i++) {
+        out += '\n' + indent + '- ' + this._serialize(value[i], level + 1);
+      }
+      return out;
+    },
+
+    _object: function(object, level) {
+      var out = '', indent = this._indent(level);
+      for (var key in object) {
+        if (!object.hasOwnProperty(key)) continue;
+        out += '\n' + indent + key + ': ' + this._serialize(object[key], level + 1);
+      }
+      return out;
+    },
+
+    _string: function(string, level) {
+      if (!/[\r\n]/.test(string))
+        return '"' + string.replace(/"/g, '\\"') + '"';
+
+      var lines  = string.split(/\r\n?|\n/),
+          out    = '|',
+          indent = this._indent(level);
+
+      for (var i = 0, n = lines.length; i < n; i++) {
+        out += '\n' + indent + lines[i];
+      }
+      return out;
+    },
+
+    _number: function(number, level) {
+      return number.toString();
+    },
+
+    _indent: function(level) {
+      var indent = '';
+      while (level--) indent += '  ';
+      return indent;
+    }
+  }),
+
+  TAP_JSON: new JS.Class(Test.Reporters.TAP_YJ, {
+    _serialize: function(value) {
+      return JS.ENV.JSON ? JSON.stringify(value) : '';
+    }
+  })
+});
+
+var R = Test.Reporters;
+
+R.register('tap/yaml', R.TAP_YAML);
+R.register('tap/y',    R.TAP_YAML);
+R.register('tap-yaml', R.TAP_YAML);
+R.register('tap-y',    R.TAP_YAML);
+
+R.register('tap/json', R.TAP_JSON);
+R.register('tap/j',    R.TAP_JSON);
+R.register('tap-json', R.TAP_JSON);
+R.register('tap-j',    R.TAP_JSON);
+
+// https://github.com/modeset/teabag
+
+Test.Reporters.extend({
+  Teabag: new JS.Class({
+    extend: {
+      Spec: new JS.Class({
+        initialize: function(spec) {
+          this._spec           = spec;
+          this.fullDescription = spec.event.fullName;
+          this.description     = spec.event.shortName;
+          this.parent          = Test.Reporters.Teabag.Suite.find(spec.event.context);
+          this.link            = '?grep=' + encodeURIComponent(this.fullDescription);
+        },
+
+        errors: function() {
+          var errors = [], faults = this._spec.faults;
+
+          for (var i = 0, n = faults.length; i < n; i++) {
+            errors.push(faults[i].error);
+          }
+          return errors;
+        },
+
+        getParents: function() {
+          if (this._parents) return this._parents;
+          this._parents = [];
+          var context = this._spec.event.context;
+          for (var i = 1, n = context.length; i < n; i++) {
+            this._parents.push(Test.Reporters.Teabag.Suite.find(context.slice(0, i)));
+          }
+          return this._parents;
+        },
+
+        result: function() {
+          var status = 'passed';
+          if (this._spec.faults.length > 0) status = 'failed';
+          return {status: status, skipped: false};
+        }
+      }),
+
+      Suite: new JS.Class({
+        extend: {
+          _cache: {},
+
+          find: function(context) {
+            var key = context.join('~');
+            if (key === '') return null;
+            return this._cache[key] = this._cache[key] || {context: context};
+          }
+        },
+
+        initialize: function(suite) {
+          var context = suite.context;
+          this.fullDescription = context.join(' ');
+          this.description     = context[context.length - 1];
+          this.parent          = this.klass.find(context.slice(0, context.length - 1));
+          this.link            = '?grep=' + encodeURIComponent(this.fullDescription);
+        }
+      })
+    },
+
+    initialize: function(options, teabag) {
+      this._teabag = teabag;
+    },
+
+    startSuite: function(event) {
+      this._teabag.reportRunnerStarting({total: event.size});
+    },
+
+    startContext: function(event) {},
+
+    startTest: function(event) {
+      this._faults = [];
+      if (this._teabag.reportSpecStarting)
+        this._teabag.reportSpecStarting({event: event, faults: this._faults});
+    },
+
+    addFault: function(event) {
+      event.error.stack = event.error.backtrace;
+      this._faults.push(event);
+    },
+
+    endTest: function(event) {
+      this._teabag.reportSpecResults({event: event, faults: this._faults});
+    },
+
+    endContext: function(event) {},
+
+    update: function(event) {},
+
+    endSuite: function(event) {
+      this._teabag.reportRunnerResults();
+    }
+  })
+});
+
+(function() {
+  if (!JS.ENV.Teabag) return;
+
+  Teabag.Reporters.HTML.prototype.envInfo = function() {
+    return 'jstest';
+  };
+
+  Teabag.Runner.prototype.setup = function() {
+    var options = {};
+    if (Teabag.params.grep) options.test = [Teabag.params.grep];
+
+    var teabag   = this.getReporter(),
+        reporter = new Test.Reporters.Teabag({}, new teabag());
+
+    Test.autorun(options, function(runner) {
+      runner.setReporter(reporter);
+    });
+  };
+
+  Teabag.Spec  = Test.Reporters.Teabag.Spec;
+  Teabag.Suite = Test.Reporters.Teabag.Suite;
+})();
+
+// https://github.com/airportyh/testem
+
+Test.Reporters.extend({
+  Testem: new JS.Class({
+    extend: {
+      SCRIPT_URL: '/testem.js',
+
+      prepare: function(callback, context) {
+        if (!JS.ENV.location) return callback.call(context || null);
+
+        var hash = (location.hash || '').replace(/^#/, '');
+        if (hash !== 'testem') return callback.call(context || null);
+
+        JS.load(this.SCRIPT_URL, function() {
+          callback.call(context || null);
+        });
+      },
+
+      create: function(options) {
+        if (JS.ENV.Testem) return new this(options);
+      }
+    },
+
+    initialize: function() {
+      var self = this;
+      Testem.useCustomAdapter(function(socket) { self._socket = socket });
+    },
+
+    startSuite: function(event) {
+      this._results = [];
+      this._testId = 0;
+      this._socket.emit('tests-start');
+    },
+
+    startContext: function(event) {},
+
+    startTest: function(event) {
+      this._testPassed = true;
+      this._faults = [];
+    },
+
+    addFault: function(event) {
+      this._testPassed = false;
+      this._faults.push({
+        passed:     false,
+        message:    event.error.message,
+        stacktrace: event.error.backtrace
+      });
+    },
+
+    endTest: function(event) {
+      var result = {
+        passed: this._testPassed ? 1 : 0,
+        failed: this._testPassed ? 0 : 1,
+        total:  1,
+        id:     ++this._testId,
+        name:   event.fullName,
+        items:  this._faults
+      };
+      this._results.push(result);
+      this._socket.emit('test-result', result);
+    },
+
+    endContext: function(event) {},
+
+    update: function(event) {},
+
+    endSuite: function(event) {
+      this._socket.emit('all-test-results', {
+        passed: event.tests - event.failures - event.errors,
+        failed: event.failures,
+        total:  event.tests,
+        tests:  this._results
+      });
+    }
+  })
+});
+
+Test.Reporters.register('testem', Test.Reporters.Testem);
+
+Test.Reporters.extend({
+  XML: new JS.Class({
+    include: Console,
+
+    startSuite: function(event) {
+      this._faults = [];
+      this._stack  = [];
+      this._suites = [];
+
+      this.puts('<?xml version="1.0" encoding="UTF-8" ?>');
+      this.puts('<testsuites>');
+    },
+
+    startContext: function(event) {
+      if (event.context === null) return;
+      if (this._stack.length === 0)
+        this._suites.push({
+          name: event.shortName,
+          cases:    [],
+          tests:    0,
+          failures: 0,
+          errors:   0,
+          start:    event.timestamp
+        });
+      this._stack.push(event.shortName);
+    },
+
+    startTest: function(event) {
+      this._suites[this._suites.length - 1].cases.push({
+        name:     event.context.slice(1).concat(event.shortName).join(' '),
+        start:    event.timestamp,
+        failures: []
+      });
+    },
+
+    addFault: function(event) {
+      var suite = this._suites[this._suites.length - 1],
+          test  = suite.cases[suite.cases.length - 1];
+
+      if (event.error.type === 'failure') {
+        suite.failures += 1;
+        test.failures.push({type: 'Failure', error: event.error});
+      } else if (event.error.type === 'error') {
+        suite.errors += 1;
+        test.failures.push({type: 'Error', error: event.error});
+      }
+    },
+
+    endTest: function(event) {
+      var suite = this._suites[this._suites.length - 1],
+          test  = suite.cases[suite.cases.length - 1];
+
+      test.time = (event.timestamp - test.start) / 1000;
+      delete test.start;
+    },
+
+    endContext: function(event) {
+      this._stack.pop();
+      if (this._stack.length > 0) return;
+      var suite = this._suites[this._suites.length - 1];
+      suite.time = (event.timestamp - suite.start) / 1000;
+      delete suite.start;
+
+      var test, failure, ending, i, j, m, n;
+
+      this.puts('    <testsuite name="' + this._xmlStr(suite.name) +
+                             '" tests="' + suite.cases.length +
+                             '" failures="' + suite.failures +
+                             '" errors="' + suite.errors +
+                             '" time="' + suite.time +
+                             '">');
+
+      for (i = 0, n = suite.cases.length; i < n; i++) {
+        test   = suite.cases[i];
+        ending = (test.failures.length === 0) ? ' />' : '>';
+        this.puts('        <testcase classname="' + this._xmlStr(suite.name) +
+                                  '" name="' + this._xmlStr(test.name) +
+                                  '" time="' + test.time +
+                                  '"' + ending);
+
+        for (j = 0, m = test.failures.length; j < m; j++) {
+          failure = test.failures[j];
+          ending  = failure.error.backtrace ? '>' : ' />';
+          this.puts('            <failure type="' + failure.type +
+                                       '" message="' + this._xmlStr(failure.error.message) +
+                                       '"' + ending);
+
+          if (failure.error.backtrace) {
+            this._printBacktrace(failure.error.backtrace);
+            this.puts('            </failure>');
+          }
+        }
+        if (test.failures.length > 0)
+          this.puts('        </testcase>');
+      }
+      this.puts('    </testsuite>');
+    },
+
+    update: function(event) {},
+
+    endSuite: function(event) {
+      this.puts('</testsuites>');
+    },
+
+    _xmlStr: function(string) {
+      return string.replace(/[\s\t\r\n]+/g, ' ')
+                   .replace(/</g, '&lt;')
+                   .replace(/>/g, '&gt;')
+                   .replace(/"/g, '&quot;');
+    },
+
+    _printBacktrace: function(backtrace) {
+      var lines = backtrace.replace(/^\s*|\s*$/g, '').split(/\s*[\r\n]+\s*/);
+      for (var i = 0, n = lines.length; i < n; i++) {
+        this.puts('                ' + this._xmlStr(lines[i]));
+      }
+    }
+  })
+});
+
+Test.Reporters.register('xml', Test.Reporters.XML);
+Test.Reporters.register('junit', Test.Reporters.XML);
+
 })();
